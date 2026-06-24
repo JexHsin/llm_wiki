@@ -47,6 +47,7 @@ const requiredPaths = [
   'src-tauri/src/api_server.rs',
   'src-tauri/src/web_api_proxy.rs',
   'src/commands/fs.ts',
+  'src/lib/search.ts',
   'src/lib/wiki-graph.ts',
   'src/lib/persist.ts',
   'src/components/project/welcome-screen.tsx',
