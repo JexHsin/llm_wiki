@@ -44,7 +44,7 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
 
     if request.method() == &Method::Get {
         if let Some((project_id, query)) = lint_route(request.url()) {
-            handle_lint(app, request, &project_id, query);
+            handle_lint(app, request, &project_id, &query);
             return;
         }
     }
@@ -54,7 +54,7 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
         &Method::Get => reqwest::Method::GET,
         &Method::Post => reqwest::Method::POST,
         _ => {
-            respond_json(request, 405, br#"{"ok":false,"error":"Method not allowed"}"#.to_vec());
+            respond_value(request, 405, json!({ "ok": false, "error": "Method not allowed" }));
             return;
         }
     };
@@ -67,13 +67,12 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
     let body = match body_result {
         Ok(body) => body,
         Err(err) => {
-            let msg = format!(r#"{{"ok":false,"error":"failed to read request body: {err}"}}"#);
-            respond_json(request, 400, msg.into_bytes());
+            respond_value(request, 400, json!({ "ok": false, "error": format!("failed to read request body: {err}") }));
             return;
         }
     };
     if body.len() > MAX_BODY_BYTES {
-        respond_json(request, 413, br#"{"ok":false,"error":"Request body too large"}"#.to_vec());
+        respond_value(request, 413, json!({ "ok": false, "error": "Request body too large" }));
         return;
     }
 
@@ -96,8 +95,8 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
                 (status, bytes)
             }
             Err(err) => {
-                let msg = format!(r#"{{"ok":false,"error":"upstream API request failed: {err}"}}"#);
-                (502, msg.into_bytes())
+                let body = json!({ "ok": false, "error": format!("upstream API request failed: {err}") });
+                (502, body.to_string().into_bytes())
             }
         }
     });
@@ -105,22 +104,21 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
     respond_json(request, result.0, result.1);
 }
 
-fn lint_route(url: &str) -> Option<(String, &str)> {
+fn lint_route(url: &str) -> Option<(String, String)> {
     let (path, query) = url.split_once('?').unwrap_or((url, ""));
     let parts = path
         .trim_start_matches("/api/v1/")
         .split('/')
         .collect::<Vec<_>>();
     match parts.as_slice() {
-        ["projects", project_id, "lint"] => Some((percent_decode(project_id), query)),
+        ["projects", project_id, "lint"] => Some((percent_decode(project_id), query.to_string())),
         _ => None,
     }
 }
 
 fn handle_lint(app: AppHandle, request: tiny_http::Request, project_id: &str, query: &str) {
     let Some((resolved_id, project_path)) = resolve_project(&app, project_id) else {
-        let msg = format!(r#"{{"ok":false,"error":"Unknown project: {project_id}"}}"#);
-        respond_json(request, 404, msg.into_bytes());
+        respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
         return;
     };
 
@@ -134,20 +132,18 @@ fn handle_lint(app: AppHandle, request: tiny_http::Request, project_id: &str, qu
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => "[]".to_string(),
         Err(err) => {
-            let msg = format!(r#"{{"ok":false,"error":"Failed to read lint state: {err}"}}"#);
-            respond_json(request, 500, msg.into_bytes());
+            respond_value(request, 500, json!({ "ok": false, "error": format!("Failed to read lint state: {err}") }));
             return;
         }
     };
     let parsed = match serde_json::from_str::<Value>(&raw) {
         Ok(Value::Array(items)) => items,
         Ok(_) => {
-            respond_json(request, 500, br#"{"ok":false,"error":"Invalid lint state JSON: expected an array"}"#.to_vec());
+            respond_value(request, 500, json!({ "ok": false, "error": "Invalid lint state JSON: expected an array" }));
             return;
         }
         Err(err) => {
-            let msg = format!(r#"{{"ok":false,"error":"Invalid lint state JSON: {err}"}}"#);
-            respond_json(request, 500, msg.into_bytes());
+            respond_value(request, 500, json!({ "ok": false, "error": format!("Invalid lint state JSON: {err}") }));
             return;
         }
     };
@@ -163,13 +159,12 @@ fn handle_lint(app: AppHandle, request: tiny_http::Request, project_id: &str, qu
         .take(limit)
         .collect::<Vec<_>>();
 
-    let body = json!({
+    respond_value(request, 200, json!({
         "ok": true,
         "projectId": resolved_id,
         "count": items.len(),
         "lint": items,
-    });
-    respond_json(request, 200, body.to_string().into_bytes());
+    }));
 }
 
 fn resolve_project(app: &AppHandle, project_id: &str) -> Option<(String, String)> {
@@ -188,7 +183,9 @@ fn resolve_project(app: &AppHandle, project_id: &str) -> Option<(String, String)
     }
     if let Some(registry) = state.get("projectRegistry").and_then(Value::as_object) {
         for (id, value) in registry {
-            let path = value.get("path").and_then(Value::as_str)?;
+            let Some(path) = value.get("path").and_then(Value::as_str) else {
+                continue;
+            };
             if id == project_id || normalize_path(path) == normalize_path(project_id) {
                 return Some((id.clone(), path.to_string()));
             }
@@ -196,7 +193,9 @@ fn resolve_project(app: &AppHandle, project_id: &str) -> Option<(String, String)
     }
     if let Some(recents) = state.get("recentProjects").and_then(Value::as_array) {
         for value in recents {
-            let path = value.get("path").and_then(Value::as_str)?;
+            let Some(path) = value.get("path").and_then(Value::as_str) else {
+                continue;
+            };
             let id = value.get("id").and_then(Value::as_str).unwrap_or(project_id);
             if id == project_id || normalize_path(path) == normalize_path(project_id) {
                 return Some((id.to_string(), path.to_string()));
@@ -249,6 +248,10 @@ fn respond_options(request: tiny_http::Request) {
     add_cors(&mut response);
     response.add_header(Header::from_bytes("Access-Control-Max-Age", "600").unwrap());
     let _ = request.respond(response);
+}
+
+fn respond_value(request: tiny_http::Request, status: u16, body: Value) {
+    respond_json(request, status, body.to_string().into_bytes());
 }
 
 fn respond_json(request: tiny_http::Request, status: u16, body: Vec<u8>) {
