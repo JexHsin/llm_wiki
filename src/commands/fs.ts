@@ -334,6 +334,7 @@ export async function openProjectFolder(path: string): Promise<void> {
 }
 
 export async function clipServerStatus(): Promise<string> {
+  assertWebUnsupported("clipServerStatus")
   return invoke<string>("clip_server_status")
 }
 
@@ -351,5 +352,6 @@ export async function apiServerReloadConfig(): Promise<string> {
 }
 
 export async function mcpServerEntryPath(): Promise<string> {
+  assertWebUnsupported("mcpServerEntryPath")
   return invoke<string>("mcp_server_entry_path")
 }
