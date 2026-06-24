@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core"
 import type { FileNode, WikiProject } from "@/types/wiki"
 import { ensureProjectId, upsertProjectInfo } from "@/lib/project-identity"
 import { isAbsolutePath } from "@/lib/path-utils"
+import { apiHealth, apiProjectFileContent, apiProjectFiles, apiProjects } from "@/commands/http-api"
+import { toFileNode, toWikiProject } from "@/commands/web-equivalent"
 
 /** Raw shape returned by the Rust commands — id is attached client-side. */
 interface RawProject {
@@ -9,10 +11,53 @@ interface RawProject {
   path: string
 }
 
+function isWebMode(): boolean {
+  return import.meta.env.VITE_LLM_WIKI_WEB_MODE === "true"
+}
+
+function normalizeFsPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "")
+}
+
+async function resolveWebProjectForPath(path: string): Promise<{ id: string; name: string; path: string; current: boolean; relativePath: string }> {
+  const res = await apiProjects()
+  const normalized = normalizeFsPath(path)
+  const projects = res.projects
+  const project = projects.find((p) => normalizeFsPath(p.path) === normalized)
+    ?? projects.find((p) => normalized.startsWith(`${normalizeFsPath(p.path)}/`))
+    ?? res.currentProject
+
+  if (!project) {
+    throw new Error(`No Web API project matches path: ${path}`)
+  }
+
+  const root = normalizeFsPath(project.path)
+  const relativePath = normalized === root
+    ? ""
+    : normalized.startsWith(`${root}/`)
+      ? normalized.slice(root.length + 1)
+      : normalized
+
+  return { ...project, relativePath }
+}
+
+function rootForRelativePath(relativePath: string): "wiki" | "sources" | "all" {
+  const rel = normalizeFsPath(relativePath).replace(/^\/+/, "")
+  if (rel === "wiki" || rel.startsWith("wiki/")) return "wiki"
+  if (rel === "raw/sources" || rel.startsWith("raw/sources/")) return "sources"
+  return "all"
+}
+
 export async function readFile(
   path: string,
   options?: { extractImages?: boolean },
 ): Promise<string> {
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    const relativePath = project.relativePath || path
+    const res = await apiProjectFileContent(project.id, relativePath)
+    return res.content
+  }
   return invoke<string>("read_file", {
     path,
     extractImages: options?.extractImages,
@@ -35,6 +80,14 @@ export async function writeFileAtomic(path: string, contents: string): Promise<v
 }
 
 export async function listDirectory(path: string): Promise<FileNode[]> {
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    const res = await apiProjectFiles(project.id, {
+      root: rootForRelativePath(project.relativePath),
+      recursive: true,
+    })
+    return res.files.map(toFileNode)
+  }
   return invoke<FileNode[]>("list_directory", { path })
 }
 
@@ -121,6 +174,16 @@ export async function createProject(
 }
 
 export async function openProject(path: string): Promise<WikiProject> {
+  if (isWebMode()) {
+    const res = await apiProjects()
+    const normalized = normalizeFsPath(path)
+    const project = res.projects.find((p) => p.id === path || normalizeFsPath(p.path) === normalized)
+      ?? res.currentProject
+    if (!project) {
+      throw new Error(`No Web API project matches path: ${path}`)
+    }
+    return toWikiProject(project)
+  }
   const raw = await invoke<RawProject>("open_project", { path })
   const id = await ensureProjectId(raw.path)
   await upsertProjectInfo(id, raw.path, raw.name)
@@ -136,6 +199,10 @@ export async function clipServerStatus(): Promise<string> {
 }
 
 export async function apiServerStatus(): Promise<string> {
+  if (isWebMode()) {
+    const health = await apiHealth()
+    return health.status
+  }
   return invoke<string>("api_server_status")
 }
 
