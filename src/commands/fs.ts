@@ -162,6 +162,14 @@ export async function createDirectory(path: string): Promise<void> {
 }
 
 export async function fileExists(path: string): Promise<boolean> {
+  if (isWebMode()) {
+    try {
+      await readFile(path)
+      return true
+    } catch {
+      return false
+    }
+  }
   return invoke<boolean>("file_exists", { path })
 }
 
