@@ -26,21 +26,26 @@ const allDeps = {
 
 for (const dep of forbiddenNewFrameworks) {
   if (dep in allDeps) {
-    throw new Error(`New knowledge-base framework is not allowed: ${dep}`);
+    throw new Error('New knowledge-base framework is not allowed: ' + dep);
   }
 }
 
 for (const p of forbiddenStandaloneKernelPaths) {
   if (fs.existsSync(path.join(root, p))) {
-    throw new Error(`Standalone RAG kernel is not allowed in web-equivalent migration: ${p}`);
+    throw new Error('Standalone RAG kernel is not allowed in web-equivalent migration: ' + p);
   }
 }
 
 const requiredPaths = [
   'src/lib/http-command-client.ts',
+  'src/lib/web-mode.ts',
+  'src/commands/http-api.ts',
+  'src/commands/web-equivalent.ts',
+  'src/commands/web-fs.ts',
   'src-tauri/src/api_server.rs',
   'src-tauri/src/web_api_proxy.rs',
   'src/commands/fs.ts',
+  'src/lib/persist.ts',
   'src/App.tsx',
   'deploy-web.sh',
   'deploy-web.bat',
@@ -48,7 +53,7 @@ const requiredPaths = [
 
 for (const p of requiredPaths) {
   if (!fs.existsSync(path.join(root, p))) {
-    throw new Error(`Missing required migration path: ${p}`);
+    throw new Error('Missing required migration path: ' + p);
   }
 }
 
