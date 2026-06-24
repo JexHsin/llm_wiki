@@ -23,7 +23,23 @@ The correct migration is not to build a new RAG engine. The original project alr
 - Replace direct Tauri `invoke(...)` calls with typed HTTP wrappers.
 - Keep request/response payloads identical to the old command payloads where possible.
 - Use `src/commands/http-api.ts` for endpoint-level wrappers.
-- Use `src/commands/web-equivalent.ts` and `src/commands/web-fs.ts` as adapter façades that convert API payloads back to existing frontend domain types.
+- Use `src/commands/web-equivalent.ts`, `src/commands/web-fs.ts`, and `src/commands/web-projects.ts` as adapter façades that convert API payloads back to existing frontend domain types.
+
+### Completed read-only substitutions
+
+When `VITE_LLM_WIKI_WEB_MODE=true`, the following read-only paths now use HTTP instead of direct Tauri invoke calls:
+
+- `src/commands/fs.ts`
+  - `readFile`
+  - `listDirectory`
+  - `openProject`
+  - `apiServerStatus`
+- `src/lib/persist.ts`
+  - `loadReviewItems` uses the existing `/reviews` API instead of reading `.llm-wiki/review.json` directly.
+- `src/commands/web-projects.ts`
+  - project list/current project helpers are available for the project selection UI migration.
+
+Desktop mode remains unchanged unless `VITE_LLM_WIKI_WEB_MODE=true` is set.
 
 ### Phase 2: Backend serviceization
 
@@ -75,6 +91,7 @@ Copy `.env.web.example` and set `VITE_LLM_WIKI_API_BASE` to the public proxy URL
 Example:
 
 ```text
+VITE_LLM_WIKI_WEB_MODE=true
 VITE_LLM_WIKI_API_BASE=http://192.168.1.10:19830
 LLM_WIKI_WEB_PORT=19830
 ```
@@ -84,9 +101,11 @@ LLM_WIKI_WEB_PORT=19830
 This branch currently contains the safe foundation only:
 
 - `src/lib/http-command-client.ts`
+- `src/lib/web-mode.ts`
 - `src/commands/http-api.ts`
 - `src/commands/web-equivalent.ts`
 - `src/commands/web-fs.ts`
+- `src/commands/web-projects.ts`
 - `src-tauri/src/web_api_proxy.rs`
 - `scripts/check-web-equivalence.mjs`
 - `deploy-web.sh`
