@@ -46,6 +46,7 @@ const requiredPaths = [
   'src/commands/web-graph.ts',
   'src-tauri/src/api_server.rs',
   'src-tauri/src/web_api_proxy.rs',
+  'src-tauri/src/web_chat.rs',
   'src/commands/fs.ts',
   'src/lib/llm-client.ts',
   'src/lib/search.ts',
