@@ -7,12 +7,14 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
+use crate::commands;
+
 #[path = "web_chat.rs"]
 mod web_chat;
 
 const DEFAULT_PUBLIC_PORT: u16 = 19830;
 const UPSTREAM: &str = "http://127.0.0.1:19828";
-const MAX_BODY_BYTES: usize = 1024 * 1024;
+const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn start_web_api_proxy(app: AppHandle) {
     thread::spawn(move || {
@@ -57,6 +59,14 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
     }
 
     if request.method() == &Method::Post {
+        if create_project_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
+            handle_create_project(request);
+            return;
+        }
         if let Some(project_id) = chat_route(request.url()) {
             if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
                 respond_value(request, status, body);
@@ -71,6 +81,46 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
                 return;
             }
             handle_project_read(app, request, &project_id);
+            return;
+        }
+        if let Some(project_id) = read_base64_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
+            handle_project_read_base64(app, request, &project_id);
+            return;
+        }
+        if let Some(project_id) = metadata_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
+            handle_project_metadata(app, request, &project_id);
+            return;
+        }
+        if let Some(project_id) = preprocess_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
+            handle_project_preprocess(app, request, &project_id);
+            return;
+        }
+        if let Some(project_id) = related_pages_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
+            handle_related_pages(app, request, &project_id);
+            return;
+        }
+        if let Some((project_id, action)) = copy_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
+            handle_project_copy(app, request, &project_id, &action);
             return;
         }
         if let Some((project_id, action)) = write_route(request.url()) {
@@ -162,6 +212,11 @@ fn lint_route(url: &str) -> Option<(String, String)> {
     }
 }
 
+fn create_project_route(url: &str) -> bool {
+    let (path, _) = url.split_once('?').unwrap_or((url, ""));
+    path == "/api/v1/projects/create"
+}
+
 fn chat_route(url: &str) -> Option<String> {
     let (path, _) = url.split_once('?').unwrap_or((url, ""));
     let parts = path
@@ -186,6 +241,67 @@ fn read_route(url: &str) -> Option<String> {
     }
 }
 
+fn read_base64_route(url: &str) -> Option<String> {
+    let (path, _) = url.split_once('?').unwrap_or((url, ""));
+    let parts = path
+        .trim_start_matches("/api/v1/")
+        .split('/')
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["projects", project_id, "files", "read-base64"] => Some(percent_decode(project_id)),
+        _ => None,
+    }
+}
+
+fn metadata_route(url: &str) -> Option<String> {
+    let (path, _) = url.split_once('?').unwrap_or((url, ""));
+    let parts = path
+        .trim_start_matches("/api/v1/")
+        .split('/')
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["projects", project_id, "files", "metadata"] => Some(percent_decode(project_id)),
+        _ => None,
+    }
+}
+
+fn preprocess_route(url: &str) -> Option<String> {
+    let (path, _) = url.split_once('?').unwrap_or((url, ""));
+    let parts = path
+        .trim_start_matches("/api/v1/")
+        .split('/')
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["projects", project_id, "files", "preprocess"] => Some(percent_decode(project_id)),
+        _ => None,
+    }
+}
+
+fn related_pages_route(url: &str) -> Option<String> {
+    let (path, _) = url.split_once('?').unwrap_or((url, ""));
+    let parts = path
+        .trim_start_matches("/api/v1/")
+        .split('/')
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["projects", project_id, "wiki", "related-pages"] => Some(percent_decode(project_id)),
+        _ => None,
+    }
+}
+
+fn copy_route(url: &str) -> Option<(String, String)> {
+    let (path, _) = url.split_once('?').unwrap_or((url, ""));
+    let parts = path
+        .trim_start_matches("/api/v1/")
+        .split('/')
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["projects", project_id, "files", "copy"] => Some((percent_decode(project_id), "copy_file".to_string())),
+        ["projects", project_id, "directories", "copy"] => Some((percent_decode(project_id), "copy_directory".to_string())),
+        _ => None,
+    }
+}
+
 fn write_route(url: &str) -> Option<(String, String)> {
     let (path, _) = url.split_once('?').unwrap_or((url, ""));
     let parts = path
@@ -194,6 +310,7 @@ fn write_route(url: &str) -> Option<(String, String)> {
         .collect::<Vec<_>>();
     match parts.as_slice() {
         ["projects", project_id, "files", "write"] => Some((percent_decode(project_id), "write_file".to_string())),
+        ["projects", project_id, "files", "write-base64"] => Some((percent_decode(project_id), "write_file_base64".to_string())),
         ["projects", project_id, "files", "write-atomic"] => Some((percent_decode(project_id), "write_file_atomic".to_string())),
         ["projects", project_id, "files", "delete"] => Some((percent_decode(project_id), "delete_file".to_string())),
         ["projects", project_id, "directories", "create"] => Some((percent_decode(project_id), "create_directory".to_string())),
@@ -201,7 +318,69 @@ fn write_route(url: &str) -> Option<(String, String)> {
     }
 }
 
+fn handle_create_project(mut request: tiny_http::Request) {
+    let body = match read_json_body(&mut request) {
+        Ok(body) => body,
+        Err((status, body)) => {
+            respond_value(request, status, body);
+            return;
+        }
+    };
+    let Some(name) = body.get("name").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: name" }));
+        return;
+    };
+    let Some(path) = body.get("path").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: path" }));
+        return;
+    };
+    match commands::project::create_project(name.to_string(), path.to_string()) {
+        Ok(project) => respond_value(request, 200, json!({
+            "ok": true,
+            "name": project.name,
+            "path": project.path,
+        })),
+        Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+    }
+}
+
 fn handle_project_read(app: AppHandle, mut request: tiny_http::Request, project_id: &str) {
+    let Some((resolved_id, project_path)) = resolve_project(&app, project_id) else {
+        respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
+        return;
+    };
+    let body = match read_json_body(&mut request) {
+        Ok(body) => body,
+        Err((status, body)) => {
+            respond_value(request, status, body);
+            return;
+        }
+    };
+    let Some(raw_path) = body.get("path").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: path" }));
+        return;
+    };
+    let extract_images = body.get("extractImages").and_then(Value::as_bool);
+    let target = match resolve_project_scoped_path(&project_path, raw_path) {
+        Ok(path) => path,
+        Err(err) => {
+            respond_value(request, 400, json!({ "ok": false, "error": err }));
+            return;
+        }
+    };
+    let target_str = normalize_path(&target.to_string_lossy());
+    match tauri::async_runtime::block_on(commands::fs::read_file(target_str.clone(), extract_images)) {
+        Ok(content) => respond_value(request, 200, json!({
+            "ok": true,
+            "projectId": resolved_id,
+            "path": target_str,
+            "content": content,
+        })),
+        Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+    }
+}
+
+fn handle_project_read_base64(app: AppHandle, mut request: tiny_http::Request, project_id: &str) {
     let Some((resolved_id, project_path)) = resolve_project(&app, project_id) else {
         respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
         return;
@@ -224,17 +403,189 @@ fn handle_project_read(app: AppHandle, mut request: tiny_http::Request, project_
             return;
         }
     };
-    match fs::read_to_string(&target) {
+    let target_str = normalize_path(&target.to_string_lossy());
+    match tauri::async_runtime::block_on(commands::fs::read_file_as_base64(target_str.clone())) {
+        Ok(file) => respond_value(request, 200, json!({
+            "ok": true,
+            "projectId": resolved_id,
+            "path": target_str,
+            "base64": file.base64,
+            "mimeType": file.mime_type,
+        })),
+        Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+    }
+}
+
+fn handle_project_metadata(app: AppHandle, mut request: tiny_http::Request, project_id: &str) {
+    let Some((resolved_id, project_path)) = resolve_project(&app, project_id) else {
+        respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
+        return;
+    };
+    let body = match read_json_body(&mut request) {
+        Ok(body) => body,
+        Err((status, body)) => {
+            respond_value(request, status, body);
+            return;
+        }
+    };
+    let Some(raw_path) = body.get("path").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: path" }));
+        return;
+    };
+    let target = match resolve_project_scoped_path(&project_path, raw_path) {
+        Ok(path) => path,
+        Err(err) => {
+            respond_value(request, 400, json!({ "ok": false, "error": err }));
+            return;
+        }
+    };
+    let target_str = normalize_path(&target.to_string_lossy());
+    let modified_time = match tauri::async_runtime::block_on(commands::fs::get_file_modified_time(target_str.clone())) {
+        Ok(value) => value,
+        Err(err) => {
+            respond_value(request, 500, json!({ "ok": false, "error": err }));
+            return;
+        }
+    };
+    let size = match tauri::async_runtime::block_on(commands::fs::get_file_size(target_str.clone())) {
+        Ok(value) => value,
+        Err(err) => {
+            respond_value(request, 500, json!({ "ok": false, "error": err }));
+            return;
+        }
+    };
+    let md5 = match tauri::async_runtime::block_on(commands::fs::get_file_md5(target_str.clone())) {
+        Ok(value) => value,
+        Err(err) => {
+            respond_value(request, 500, json!({ "ok": false, "error": err }));
+            return;
+        }
+    };
+    respond_value(request, 200, json!({
+        "ok": true,
+        "projectId": resolved_id,
+        "path": target_str,
+        "modifiedTime": modified_time,
+        "size": size,
+        "md5": md5,
+    }));
+}
+
+fn handle_project_preprocess(app: AppHandle, mut request: tiny_http::Request, project_id: &str) {
+    let Some((resolved_id, project_path)) = resolve_project(&app, project_id) else {
+        respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
+        return;
+    };
+    let body = match read_json_body(&mut request) {
+        Ok(body) => body,
+        Err((status, body)) => {
+            respond_value(request, status, body);
+            return;
+        }
+    };
+    let Some(raw_path) = body.get("path").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: path" }));
+        return;
+    };
+    let target = match resolve_project_scoped_path(&project_path, raw_path) {
+        Ok(path) => path,
+        Err(err) => {
+            respond_value(request, 400, json!({ "ok": false, "error": err }));
+            return;
+        }
+    };
+    let target_str = normalize_path(&target.to_string_lossy());
+    match tauri::async_runtime::block_on(commands::fs::preprocess_file(target_str.clone())) {
         Ok(content) => respond_value(request, 200, json!({
             "ok": true,
             "projectId": resolved_id,
-            "path": normalize_path(&target.to_string_lossy()),
+            "path": target_str,
             "content": content,
         })),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            respond_value(request, 404, json!({ "ok": false, "error": format!("File not found: {err}") }))
+        Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+    }
+}
+
+fn handle_related_pages(app: AppHandle, mut request: tiny_http::Request, project_id: &str) {
+    let Some((resolved_id, project_path)) = resolve_project(&app, project_id) else {
+        respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
+        return;
+    };
+    let body = match read_json_body(&mut request) {
+        Ok(body) => body,
+        Err((status, body)) => {
+            respond_value(request, status, body);
+            return;
         }
-        Err(err) => respond_value(request, 415, json!({ "ok": false, "error": format!("File is not readable as UTF-8 text: {err}") })),
+    };
+    let Some(source_name) = body.get("sourceName").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: sourceName" }));
+        return;
+    };
+    match tauri::async_runtime::block_on(commands::fs::find_related_wiki_pages(project_path, source_name.to_string())) {
+        Ok(pages) => respond_value(request, 200, json!({
+            "ok": true,
+            "projectId": resolved_id,
+            "pages": pages,
+        })),
+        Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+    }
+}
+
+fn handle_project_copy(app: AppHandle, mut request: tiny_http::Request, project_id: &str, action: &str) {
+    let Some((resolved_id, project_path)) = resolve_project(&app, project_id) else {
+        respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
+        return;
+    };
+    let body = match read_json_body(&mut request) {
+        Ok(body) => body,
+        Err((status, body)) => {
+            respond_value(request, status, body);
+            return;
+        }
+    };
+    let Some(raw_source) = body.get("source").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: source" }));
+        return;
+    };
+    let Some(raw_destination) = body.get("destination").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: destination" }));
+        return;
+    };
+    let source = match resolve_project_scoped_path(&project_path, raw_source) {
+        Ok(path) => path,
+        Err(err) => {
+            respond_value(request, 400, json!({ "ok": false, "error": err }));
+            return;
+        }
+    };
+    let destination = match resolve_project_scoped_path(&project_path, raw_destination) {
+        Ok(path) => path,
+        Err(err) => {
+            respond_value(request, 400, json!({ "ok": false, "error": err }));
+            return;
+        }
+    };
+    let source = normalize_path(&source.to_string_lossy());
+    let destination = normalize_path(&destination.to_string_lossy());
+    match action {
+        "copy_file" => match tauri::async_runtime::block_on(commands::fs::copy_file(source, destination.clone())) {
+            Ok(()) => respond_value(request, 200, json!({
+                "ok": true,
+                "projectId": resolved_id,
+                "path": destination,
+            })),
+            Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+        },
+        "copy_directory" => match tauri::async_runtime::block_on(commands::fs::copy_directory(source, destination)) {
+            Ok(files) => respond_value(request, 200, json!({
+                "ok": true,
+                "projectId": resolved_id,
+                "files": files,
+            })),
+            Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+        },
+        _ => respond_value(request, 400, json!({ "ok": false, "error": format!("Unsupported copy action: {action}") })),
     }
 }
 
@@ -261,38 +612,32 @@ fn handle_project_write(app: AppHandle, mut request: tiny_http::Request, project
             return;
         }
     };
+    let target_str = normalize_path(&target.to_string_lossy());
 
     let result = match action {
-        "write_file" | "write_file_atomic" => {
+        "write_file" => {
             let Some(contents) = body.get("contents").and_then(Value::as_str) else {
                 respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: contents" }));
                 return;
             };
-            if let Some(parent) = target.parent() {
-                if let Err(err) = fs::create_dir_all(parent) {
-                    Err(format!("Failed to create parent directory: {err}"))
-                } else if action == "write_file_atomic" {
-                    let tmp = target.with_extension(format!("{}.tmp", target.extension().and_then(|s| s.to_str()).unwrap_or("file")));
-                    fs::write(&tmp, contents)
-                        .and_then(|_| fs::rename(&tmp, &target))
-                        .map_err(|err| format!("Failed to write file atomically: {err}"))
-                } else {
-                    fs::write(&target, contents).map_err(|err| format!("Failed to write file: {err}"))
-                }
-            } else {
-                Err("Invalid target path".to_string())
-            }
+            tauri::async_runtime::block_on(commands::fs::write_file(target_str.clone(), contents.to_string()))
         }
-        "delete_file" => {
-            if target.is_dir() {
-                fs::remove_dir_all(&target).map_err(|err| format!("Failed to delete directory: {err}"))
-            } else if target.exists() {
-                fs::remove_file(&target).map_err(|err| format!("Failed to delete file: {err}"))
-            } else {
-                Ok(())
-            }
+        "write_file_base64" => {
+            let Some(base64) = body.get("base64").and_then(Value::as_str) else {
+                respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: base64" }));
+                return;
+            };
+            tauri::async_runtime::block_on(commands::fs::write_file_base64(target_str.clone(), base64.to_string()))
         }
-        "create_directory" => fs::create_dir_all(&target).map_err(|err| format!("Failed to create directory: {err}")),
+        "write_file_atomic" => {
+            let Some(contents) = body.get("contents").and_then(Value::as_str) else {
+                respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: contents" }));
+                return;
+            };
+            tauri::async_runtime::block_on(commands::fs::write_file_atomic(target_str.clone(), contents.to_string()))
+        }
+        "delete_file" => tauri::async_runtime::block_on(commands::fs::delete_file(target_str.clone())),
+        "create_directory" => tauri::async_runtime::block_on(commands::fs::create_directory(target_str.clone())),
         _ => Err(format!("Unsupported write action: {action}")),
     };
 
@@ -300,7 +645,7 @@ fn handle_project_write(app: AppHandle, mut request: tiny_http::Request, project
         Ok(()) => respond_value(request, 200, json!({
             "ok": true,
             "projectId": resolved_id,
-            "path": normalize_path(&target.to_string_lossy()),
+            "path": target_str,
         })),
         Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
     }
