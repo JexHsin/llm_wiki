@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::thread;
 
 use serde_json::{json, Value};
@@ -47,6 +47,10 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
 
     if request.method() == &Method::Get {
         if let Some((project_id, query)) = lint_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
             handle_lint(app, request, &project_id, &query);
             return;
         }
@@ -54,10 +58,18 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
 
     if request.method() == &Method::Post {
         if let Some(project_id) = chat_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
             web_chat::handle_web_chat(client, request, project_id);
             return;
         }
         if let Some((project_id, action)) = write_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
             handle_project_write(app, request, &project_id, &action);
             return;
         }
@@ -240,17 +252,26 @@ fn handle_project_write(app: AppHandle, mut request: tiny_http::Request, project
 fn resolve_project_scoped_path(project_path: &str, raw_path: &str) -> Result<PathBuf, String> {
     let project_norm = normalize_path(project_path);
     let raw_norm = normalize_path(raw_path);
-    let target = if raw_norm == project_norm || raw_norm.starts_with(&format!("{project_norm}/")) {
-        PathBuf::from(raw_path)
+    let relative = if raw_norm == project_norm {
+        ""
+    } else if let Some(stripped) = raw_norm.strip_prefix(&format!("{project_norm}/")) {
+        stripped
     } else {
-        Path::new(project_path).join(raw_norm.trim_start_matches('/'))
+        raw_norm.trim_start_matches('/')
     };
-    let target_norm = normalize_path(&target.to_string_lossy());
-    if target_norm == project_norm || target_norm.starts_with(&format!("{project_norm}/")) {
-        Ok(target)
-    } else {
-        Err("Path escapes project root".to_string())
+
+    let mut safe_relative = PathBuf::new();
+    for component in Path::new(relative).components() {
+        match component {
+            Component::Normal(part) => safe_relative.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => return Err("Path escapes project root".to_string()),
+            Component::RootDir | Component::Prefix(_) => {
+                return Err("Absolute path outside project root is not allowed".to_string())
+            }
+        }
     }
+    Ok(Path::new(project_path).join(safe_relative))
 }
 
 fn handle_lint(app: AppHandle, request: tiny_http::Request, project_id: &str, query: &str) {
@@ -340,6 +361,85 @@ fn resolve_project(app: &AppHandle, project_id: &str) -> Option<(String, String)
         }
     }
     None
+}
+
+fn ensure_api_access(app: &AppHandle, url: &str, headers: &[Header]) -> Option<(u16, Value)> {
+    if !api_enabled(app) {
+        return Some((503, json!({ "ok": false, "error": "API server is disabled in Settings → API Server" })));
+    }
+    if !is_authorized(app, url, headers) {
+        return Some((401, json!({ "ok": false, "error": "Unauthorized" })));
+    }
+    None
+}
+
+fn is_authorized(app: &AppHandle, url: &str, headers: &[Header]) -> bool {
+    if !api_auth_required(app) {
+        return true;
+    }
+    let Some(token) = api_token(app) else {
+        return false;
+    };
+    let (_, query) = url.split_once('?').unwrap_or((url, ""));
+    if query_param(query, "token")
+        .map(|value| constant_time_eq(value.as_bytes(), token.as_bytes()))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    headers.iter().any(|header| {
+        let key = header.field.as_str().to_ascii_lowercase();
+        let value = header.value.as_str();
+        if key == "x-llm-wiki-token" {
+            return constant_time_eq(value.as_bytes(), token.as_bytes());
+        }
+        if key == "authorization" {
+            return value
+                .strip_prefix("Bearer ")
+                .map(|v| constant_time_eq(v.as_bytes(), token.as_bytes()))
+                .unwrap_or(false);
+        }
+        false
+    })
+}
+
+fn api_auth_required(app: &AppHandle) -> bool {
+    !api_allow_unauthenticated(app)
+}
+
+fn api_allow_unauthenticated(app: &AppHandle) -> bool {
+    load_app_state(app)
+        .and_then(|parsed| parsed.get("apiConfig").and_then(|v| v.get("allowUnauthenticated")).and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
+fn api_enabled(app: &AppHandle) -> bool {
+    load_app_state(app)
+        .and_then(|parsed| parsed.get("apiConfig").and_then(|v| v.get("enabled")).and_then(Value::as_bool))
+        .unwrap_or(true)
+}
+
+fn api_token(app: &AppHandle) -> Option<String> {
+    if let Ok(token) = std::env::var("LLM_WIKI_API_TOKEN") {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    load_app_state(app)
+        .and_then(|parsed| parsed.get("apiConfig").and_then(|v| v.get("token")).and_then(Value::as_str).map(ToOwned::to_owned))
+        .filter(|token| !token.is_empty())
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let max_len = left.len().max(right.len());
+    let mut diff = left.len() ^ right.len();
+    for i in 0..max_len {
+        let a = left.get(i).copied().unwrap_or(0);
+        let b = right.get(i).copied().unwrap_or(0);
+        diff |= (a ^ b) as usize;
+    }
+    diff == 0
 }
 
 fn load_app_state(app: &AppHandle) -> Option<Value> {
