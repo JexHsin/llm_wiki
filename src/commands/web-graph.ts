@@ -1,4 +1,5 @@
-import { getWebProjectGraph } from "@/commands/web-equivalent"
+import { getWebProjectGraph, getCurrentWebProject } from "@/commands/web-equivalent"
+import { normalizePath } from "@/lib/path-utils"
 import type { GraphEdge, GraphNode, CommunityInfo } from "@/lib/wiki-graph"
 
 interface ApiGraphNodeLike {
@@ -26,6 +27,14 @@ function asNumber(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback
 }
 
+function toAbsoluteProjectPath(projectPath: string, path: string): string {
+  const pp = normalizePath(projectPath)
+  const normalized = normalizePath(path).replace(/^\/+/, "")
+  return normalized === pp || normalized.startsWith(`${pp}/`)
+    ? normalized
+    : `${pp}/${normalized}`
+}
+
 function buildSingleCommunity(nodes: GraphNode[]): CommunityInfo[] {
   if (nodes.length === 0) return []
   return [{
@@ -41,15 +50,22 @@ function buildSingleCommunity(nodes: GraphNode[]): CommunityInfo[] {
 }
 
 export async function loadWebGraphData(projectId = "current"): Promise<{ nodes: GraphNode[]; edges: GraphEdge[]; communities: CommunityInfo[] }> {
-  const response = await getWebProjectGraph(projectId)
-  const nodes = (response.nodes as ApiGraphNodeLike[]).map((node) => ({
-    id: asString(node.id),
-    label: asString(node.label, asString(node.id)),
-    type: asString(node.type ?? node.nodeType, "other"),
-    path: asString(node.path),
-    linkCount: asNumber(node.linkCount ?? node.link_count, 0),
-    community: asNumber(node.community, 0),
-  })).filter((node) => node.id && node.path)
+  const [response, project] = await Promise.all([
+    getWebProjectGraph(projectId),
+    getCurrentWebProject(),
+  ])
+  const projectPath = project?.path ?? ""
+  const nodes = (response.nodes as ApiGraphNodeLike[]).map((node) => {
+    const rawPath = asString(node.path)
+    return {
+      id: asString(node.id),
+      label: asString(node.label, asString(node.id)),
+      type: asString(node.type ?? node.nodeType, "other"),
+      path: projectPath ? toAbsoluteProjectPath(projectPath, rawPath) : rawPath,
+      linkCount: asNumber(node.linkCount ?? node.link_count, 0),
+      community: asNumber(node.community, 0),
+    }
+  }).filter((node) => node.id && node.path)
 
   const nodeIds = new Set(nodes.map((node) => node.id))
   const edges = (response.edges as ApiGraphEdgeLike[]).map((edge) => ({
