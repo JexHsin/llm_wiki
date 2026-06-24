@@ -47,13 +47,19 @@ fn handle_request(client: reqwest::Client, mut request: tiny_http::Request) {
         }
     };
 
-    let mut limited = request.as_reader().take(MAX_BODY_BYTES as u64 + 1);
-    let mut body = Vec::new();
-    if let Err(err) = limited.read_to_end(&mut body) {
-        let msg = format!(r#"{{"ok":false,"error":"failed to read request body: {err}"}}"#);
-        respond_json(request, 400, msg.into_bytes());
-        return;
-    }
+    let body_result = {
+        let mut limited = request.as_reader().take(MAX_BODY_BYTES as u64 + 1);
+        let mut body = Vec::new();
+        limited.read_to_end(&mut body).map(|_| body)
+    };
+    let body = match body_result {
+        Ok(body) => body,
+        Err(err) => {
+            let msg = format!(r#"{{"ok":false,"error":"failed to read request body: {err}"}}"#);
+            respond_json(request, 400, msg.into_bytes());
+            return;
+        }
+    };
     if body.len() > MAX_BODY_BYTES {
         respond_json(request, 413, br#"{"ok":false,"error":"Request body too large"}"#.to_vec());
         return;
