@@ -1,6 +1,7 @@
 export interface HttpCommandOptions {
   baseUrl?: string
   token?: string
+  signal?: AbortSignal
 }
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:19828"
@@ -23,6 +24,7 @@ export async function httpGet<T>(path: string, options?: HttpCommandOptions): Pr
   const res = await fetch(`${apiBase(options)}${path}`, {
     method: "GET",
     headers: authHeaders(options),
+    signal: options?.signal,
   })
   return parseResponse<T>(res)
 }
@@ -35,6 +37,7 @@ export async function httpPost<T>(path: string, body?: unknown, options?: HttpCo
       ...authHeaders(options),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: options?.signal,
   })
   return parseResponse<T>(res)
 }
@@ -47,6 +50,7 @@ export async function httpPostRaw(path: string, body?: unknown, options?: HttpCo
       ...authHeaders(options),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: options?.signal,
   })
 }
 
