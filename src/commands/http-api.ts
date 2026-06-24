@@ -69,6 +69,11 @@ export interface ApiGraphResponse {
   edges: unknown[]
 }
 
+export interface ApiRescanResponse {
+  ok: boolean
+  projectId: string
+}
+
 export function apiHealth(options?: HttpCommandOptions): Promise<ApiHealth> {
   return httpGet<ApiHealth>(healthApiPath(), options)
 }
@@ -123,8 +128,8 @@ export function apiProjectGraph(projectId: string, options?: HttpCommandOptions)
   return httpGet<ApiGraphResponse>(projectApiPath(projectId, "/graph"), options)
 }
 
-export function apiProjectRescan(projectId: string, options?: HttpCommandOptions): Promise<{ ok: boolean; projectId: string }> {
-  return httpPost(projectApiPath(projectId, "/sources/rescan"), {}, options)
+export function apiProjectRescan(projectId: string, options?: HttpCommandOptions): Promise<ApiRescanResponse> {
+  return httpPost<ApiRescanResponse>(projectApiPath(projectId, "/sources/rescan"), {}, options)
 }
 
 export function apiProjectChat(projectId: string, body: unknown, options?: HttpCommandOptions): Promise<unknown> {
