@@ -103,7 +103,7 @@ export async function readFile(
 ): Promise<string> {
   if (isWebMode()) {
     const project = await resolveWebProjectForPath(path)
-    const res = await apiProjectReadFile(project.id, path)
+    const res = await apiProjectReadFile(project.id, path, options?.extractImages)
     return res.content
   }
   return invoke<string>("read_file", {
