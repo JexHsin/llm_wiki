@@ -60,6 +60,35 @@ function rootForRelativePath(relativePath: string): "wiki" | "sources" | "all" {
   return "all"
 }
 
+function relativeWithinRoot(relativePath: string): string {
+  const rel = normalizeFsPath(relativePath).replace(/^\/+/, "")
+  if (rel === "wiki" || rel === "raw/sources") return ""
+  if (rel.startsWith("wiki/")) return rel.slice("wiki/".length)
+  if (rel.startsWith("raw/sources/")) return rel.slice("raw/sources/".length)
+  return rel
+}
+
+function findNodeByRelativePath(nodes: FileNode[], relativePath: string): FileNode | null {
+  const target = normalizeFsPath(relativePath).replace(/^\/+/, "")
+  if (!target) return null
+
+  function visit(node: FileNode): FileNode | null {
+    const normalizedPath = normalizeFsPath(node.path).replace(/^\/+/, "")
+    if (normalizedPath.endsWith(`/${target}`) || normalizedPath === target) return node
+    for (const child of node.children ?? []) {
+      const found = visit(child)
+      if (found) return found
+    }
+    return null
+  }
+
+  for (const node of nodes) {
+    const found = visit(node)
+    if (found) return found
+  }
+  return null
+}
+
 export async function readFile(
   path: string,
   options?: { extractImages?: boolean },
@@ -109,7 +138,12 @@ export async function listDirectory(path: string): Promise<FileNode[]> {
       root: rootForRelativePath(project.relativePath),
       recursive: true,
     })
-    return res.files.map(toFileNode)
+    const nodes = res.files.map(toFileNode)
+    const rel = relativeWithinRoot(project.relativePath)
+    if (!rel) return nodes
+    const node = findNodeByRelativePath(nodes, rel)
+    if (!node) return []
+    return node.is_dir ? (node.children ?? []) : []
   }
   return invoke<FileNode[]>("list_directory", { path })
 }
@@ -167,7 +201,12 @@ export async function fileExists(path: string): Promise<boolean> {
       await readFile(path)
       return true
     } catch {
-      return false
+      try {
+        const entries = await listDirectory(path)
+        return entries.length >= 0
+      } catch {
+        return false
+      }
     }
   }
   return invoke<boolean>("file_exists", { path })
