@@ -1,5 +1,5 @@
 // NOTE: This file keeps the original embedding pipeline intact. Web mode only
-// swaps the vector-store call boundary from Tauri invoke(...) to HTTP API calls.
+// swaps the external command boundaries from Tauri invoke/plugin fetch to HTTP API calls.
 
 import { readFile, listDirectory } from "@/commands/fs"
 import { invoke } from "@tauri-apps/api/core"
@@ -11,6 +11,7 @@ import { chunkMarkdown, type Chunk } from "@/lib/text-chunker"
 import { isLocalOrPrivateHttpEndpoint, localLlmOriginHeader } from "@/lib/llm-providers"
 import { isWebMode } from "@/lib/web-mode"
 import {
+  apiProjectChat,
   apiProjectVectorClearChunks,
   apiProjectVectorCountChunks,
   apiProjectVectorDeletePage,
@@ -43,8 +44,6 @@ function isSafeExtraHeader(name: string, value: string): boolean {
   )
 }
 
-// ── Error surfacing ──────────────────────────────────────────────────────
-
 let lastEmbeddingError: string | null = null
 const INCREMENTAL_OPTIMIZE_PAGE_THRESHOLD = 20
 const incrementalOptimizeCounts = new Map<string, number>()
@@ -56,8 +55,6 @@ export function getLastEmbeddingError(): string | null {
 export function resetEmbeddingOptimizeAccountingForTests(): void {
   incrementalOptimizeCounts.clear()
 }
-
-// ── fetchEmbedding with auto-halve retry ────────────────────────────────
 
 export function looksLikeOversizeError(httpStatus: number, body: string): boolean {
   if (httpStatus === 413) return true
@@ -72,6 +69,22 @@ export function looksLikeOversizeError(httpStatus: number, body: string): boolea
     lower.includes("exceeds") ||
     lower.includes("input length")
   )
+}
+
+async function postEmbeddingRequest(
+  endpoint: string,
+  headers: Record<string, string>,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  if (isWebMode()) {
+    return apiProjectChat("current", { url: endpoint, headers, body })
+  }
+  const httpFetch = await getHttpFetch()
+  return httpFetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  })
 }
 
 export async function fetchEmbedding(
@@ -111,18 +124,12 @@ export async function fetchEmbedding(
   while (attempts <= maxRetries) {
     attempts++
     try {
-      const httpFetch = await getHttpFetch()
-      const resp = await httpFetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(
-          isGoogleNative
-            ? googleEmbeddingBody(cfg.model, current, cfg.outputDimensionality)
-            : isDoubaoMultimodal
-              ? doubaoMultimodalEmbeddingBody(cfg.model, current)
-              : { model: cfg.model, input: current },
-        ),
-      })
+      const requestBody = isGoogleNative
+        ? googleEmbeddingBody(cfg.model, current, cfg.outputDimensionality)
+        : isDoubaoMultimodal
+          ? doubaoMultimodalEmbeddingBody(cfg.model, current)
+          : { model: cfg.model, input: current }
+      const resp = await postEmbeddingRequest(endpoint, headers, requestBody)
 
       if (resp.ok) {
         const data = await resp.json()
@@ -323,8 +330,6 @@ function doubaoMultimodalEmbeddingBody(model: string, text: string): Record<stri
   }
 }
 
-// ── LanceDB v2 operations ────────────────────────────────────────────────
-
 interface ChunkUpsertInput {
   chunkIndex: number
   chunkText: string
@@ -484,8 +489,6 @@ async function noteIncrementalVectorWrite(projectPath: string): Promise<void> {
   await optimizeChunkVectorTableBestEffort(pp)
 }
 
-// ── Chunk enrichment ─────────────────────────────────────────────────────
-
 function enrichChunkForEmbedding(
   pageTitle: string,
   chunk: Chunk,
@@ -561,8 +564,6 @@ async function preparePageEmbeddingRows(
     },
   }
 }
-
-// ── Public API: embedPage / embedAllPages / searchByEmbedding ────────────
 
 export async function embedPage(
   projectPath: string,
