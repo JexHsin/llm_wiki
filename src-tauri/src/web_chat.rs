@@ -3,7 +3,7 @@ use std::io::Read;
 use serde_json::{json, Value};
 use tiny_http::{Header, Response, StatusCode};
 
-const MAX_BODY_BYTES: usize = 1024 * 1024;
+const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn handle_web_chat(client: reqwest::Client, mut request: tiny_http::Request, _project_id: String) {
     let body = match read_json_body(&mut request) {
