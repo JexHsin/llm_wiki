@@ -1,4 +1,6 @@
 import type { LlmConfig } from "@/stores/wiki-store"
+import { apiProjectChat } from "@/commands/http-api"
+import { isWebMode } from "@/lib/web-mode"
 import { isAzureOpenAiEndpoint } from "@/lib/azure-openai"
 import { getProviderConfig, type RequestOverrides } from "./llm-providers"
 import { getHttpFetch, isFetchNetworkError } from "./tauri-fetch"
@@ -12,6 +14,11 @@ export interface StreamCallbacks {
   onReasoningToken?: (token: string) => void
   onDone: () => void
   onError: (error: Error) => void
+}
+
+interface WebChatResponse {
+  ok: boolean
+  answer: string
 }
 
 // Lazy import keeps the Tauri event/invoke bindings out of bundles that
@@ -68,6 +75,33 @@ export async function streamChat(
   requestOverrides?: RequestOverrides,
 ): Promise<void> {
   const { onToken, onDone, onError } = callbacks
+
+  if (isWebMode()) {
+    if (signal?.aborted) {
+      onDone()
+      return
+    }
+    try {
+      const response = await apiProjectChat("current", {
+        llmConfig: config,
+        messages,
+        requestOverrides,
+      }) as WebChatResponse
+      if (signal?.aborted) {
+        onDone()
+        return
+      }
+      onToken(response.answer ?? "")
+      onDone()
+    } catch (err) {
+      if (signal?.aborted) {
+        onDone()
+        return
+      }
+      onError(err instanceof Error ? err : new Error(String(err)))
+    }
+    return
+  }
 
   // Claude Code CLI uses a subprocess transport (stdin/stdout), not
   // HTTP. Dispatch before getProviderConfig — that function throws for
