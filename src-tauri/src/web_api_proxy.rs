@@ -7,6 +7,9 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
+#[path = "web_chat.rs"]
+mod web_chat;
+
 const DEFAULT_PUBLIC_PORT: u16 = 19830;
 const UPSTREAM: &str = "http://127.0.0.1:19828";
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -50,6 +53,10 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
     }
 
     if request.method() == &Method::Post {
+        if let Some(project_id) = chat_route(request.url()) {
+            web_chat::handle_web_chat(client, request, project_id);
+            return;
+        }
         if let Some((project_id, action)) = write_route(request.url()) {
             handle_project_write(app, request, &project_id, &action);
             return;
@@ -135,6 +142,18 @@ fn lint_route(url: &str) -> Option<(String, String)> {
     }
 }
 
+fn chat_route(url: &str) -> Option<String> {
+    let (path, _) = url.split_once('?').unwrap_or((url, ""));
+    let parts = path
+        .trim_start_matches("/api/v1/")
+        .split('/')
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["projects", project_id, "chat"] => Some(percent_decode(project_id)),
+        _ => None,
+    }
+}
+
 fn write_route(url: &str) -> Option<(String, String)> {
     let (path, _) = url.split_once('?').unwrap_or((url, ""));
     let parts = path
@@ -198,8 +217,10 @@ fn handle_project_write(app: AppHandle, mut request: tiny_http::Request, project
         "delete_file" => {
             if target.is_dir() {
                 fs::remove_dir_all(&target).map_err(|err| format!("Failed to delete directory: {err}"))
-            } else {
+            } else if target.exists() {
                 fs::remove_file(&target).map_err(|err| format!("Failed to delete file: {err}"))
+            } else {
+                Ok(())
             }
         }
         "create_directory" => fs::create_dir_all(&target).map_err(|err| format!("Failed to create directory: {err}")),
