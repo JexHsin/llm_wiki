@@ -30,15 +30,25 @@ The correct migration is not to build a new RAG engine. The original project alr
 When `VITE_LLM_WIKI_WEB_MODE=true`, the following paths now use HTTP instead of direct Tauri invoke calls:
 
 - `src/commands/fs.ts`
-  - `readFile` uses project-scoped `/files/read`, so `.llm-wiki/*` state files keep the same behavior as desktop mode.
-  - `listDirectory` maps API file trees back to the requested subtree, matching desktop `list_directory(path)` semantics.
-  - `openProject`
-  - `apiServerStatus`
+  - `readFile` uses project-scoped `/files/read` and forwards `extractImages`, so `.llm-wiki/*`, PDF/Office preprocessing reads, media placeholders, and extracted-image behavior keep the same Rust `commands::fs::read_file` semantics as desktop mode.
   - `writeFile`
+  - `writeFileBase64`
   - `writeFileAtomic`
+  - `readFileAsBase64`
+  - `copyFile`
+  - `copyDirectory`
+  - `preprocessFile`
   - `deleteFile`
   - `createDirectory`
   - `fileExists`
+  - `getFileModifiedTime`
+  - `getFileSize`
+  - `getFileMd5`
+  - `findRelatedWikiPages`
+  - `createProject`
+  - `listDirectory` maps API file trees back to the requested subtree, matching desktop `list_directory(path)` semantics.
+  - `openProject`
+  - `apiServerStatus`
 - `src/lib/llm-client.ts`
   - `streamChat` still uses the original `llm-providers.ts` provider URL/body/header/parse pipeline. In Web mode, the provider HTTP request is sent through `/chat` as an authenticated proxy instead of being reimplemented in Rust.
 - `src/lib/search.ts`
@@ -54,9 +64,9 @@ When `VITE_LLM_WIKI_WEB_MODE=true`, the following paths now use HTTP instead of 
 
 Desktop mode remains unchanged unless `VITE_LLM_WIKI_WEB_MODE=true` is set.
 
-### Web-mode write and read safeguards
+### Web-mode safeguards
 
-Project-scoped read/write endpoints are implemented in the Web proxy for text read, write, atomic write, delete, and create-directory operations. Compatibility endpoints now follow the same API enabled/auth rules as the original local API server. Paths are resolved against the current project, reject traversal/prefix/root escapes, and canonicalize existing paths/parents to prevent symlink escape. Unsupported binary/project-management operations still fail fast in Web mode instead of falling through to Tauri.
+Project-scoped read/write/copy/metadata/preprocess endpoints are implemented in the Web proxy. Compatibility endpoints follow the same API enabled/auth rules as the original local API server. Project file paths are resolved against the current project, reject traversal/prefix/root escapes, and canonicalize existing paths/parents to reduce symlink escape risk. Unsupported desktop shell operations still fail fast in Web mode instead of falling through to Tauri.
 
 ### Phase 2: Backend serviceization
 
@@ -101,15 +111,34 @@ The original Rust API remains the source of truth on `127.0.0.1:19828`. To avoid
 
 The bridge also exposes compatibility endpoints that the original local API did not yet include:
 
+- `POST /api/v1/projects/create`
 - `GET /api/v1/projects/{projectId}/lint`
 - `POST /api/v1/projects/{projectId}/files/read`
+- `POST /api/v1/projects/{projectId}/files/read-base64`
 - `POST /api/v1/projects/{projectId}/files/write`
+- `POST /api/v1/projects/{projectId}/files/write-base64`
 - `POST /api/v1/projects/{projectId}/files/write-atomic`
 - `POST /api/v1/projects/{projectId}/files/delete`
+- `POST /api/v1/projects/{projectId}/files/copy`
+- `POST /api/v1/projects/{projectId}/files/preprocess`
+- `POST /api/v1/projects/{projectId}/files/metadata`
 - `POST /api/v1/projects/{projectId}/directories/create`
+- `POST /api/v1/projects/{projectId}/directories/copy`
+- `POST /api/v1/projects/{projectId}/wiki/related-pages`
 - `POST /api/v1/projects/{projectId}/chat`
 
 This is a migration bridge, not a new knowledge-base implementation. The final serviceized version should move these endpoints into the original API server once full command-equivalence tests are in place.
+
+## Remaining non-equivalent / desktop-only operations
+
+The remaining explicit Web-mode failures are desktop shell or local integration operations rather than core Wiki business logic:
+
+- `openProjectFolder` — opens the host OS file explorer.
+- `apiServerReloadConfig` — directly reloads the local desktop API config cache.
+- `mcpServerEntryPath` — exposes a local desktop-side MCP entry path.
+- `clipServerStatus` — still uses the desktop command path.
+
+Full desktop-vs-web equivalence tests still need to be run before marking the PR ready.
 
 ## Environment
 
