@@ -5,7 +5,7 @@ use tiny_http::{Header, Response, StatusCode};
 
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
-pub fn handle_web_chat(client: reqwest::Client, mut request: tiny_http::Request, project_id: String) {
+pub fn handle_web_chat(client: reqwest::Client, mut request: tiny_http::Request, _project_id: String) {
     let body = match read_json_body(&mut request) {
         Ok(body) => body,
         Err((status, body)) => {
@@ -13,114 +13,66 @@ pub fn handle_web_chat(client: reqwest::Client, mut request: tiny_http::Request,
             return;
         }
     };
-    let Some(llm_config) = body.get("llmConfig") else {
-        respond_value(request, 400, json!({ "ok": false, "error": "Missing field: llmConfig" }));
+    let Some(url) = body.get("url").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: url" }));
         return;
     };
-    let Some(messages) = body.get("messages").and_then(Value::as_array) else {
-        respond_value(request, 400, json!({ "ok": false, "error": "Missing array field: messages" }));
-        return;
-    };
-    let provider = llm_config.get("provider").and_then(Value::as_str).unwrap_or("custom");
-    let model = llm_config.get("model").and_then(Value::as_str).unwrap_or("");
-    if model.trim().is_empty() {
-        respond_value(request, 400, json!({ "ok": false, "error": "Missing llmConfig.model" }));
+    if !is_allowed_http_url(url) {
+        respond_value(request, 400, json!({ "ok": false, "error": "Chat provider URL must be http or https" }));
         return;
     }
-    let endpoint = match chat_completion_endpoint(llm_config) {
-        Ok(endpoint) => endpoint,
-        Err(err) => {
-            respond_value(request, 400, json!({ "ok": false, "error": err }));
-            return;
-        }
+    let Some(provider_body) = body.get("body") else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing field: body" }));
+        return;
     };
 
-    let mut payload = json!({
-        "model": model,
-        "messages": messages,
-        "stream": false,
-    });
-    if let Some(overrides) = body.get("requestOverrides").and_then(Value::as_object) {
-        for (key, value) in overrides {
-            payload[key] = value.clone();
+    let mut builder = client.post(url);
+    if let Some(headers) = body.get("headers").and_then(Value::as_object) {
+        for (key, value) in headers {
+            let Some(value) = value.as_str() else { continue };
+            if is_safe_forward_header(key) {
+                builder = builder.header(key, value);
+            }
         }
     }
-    let api_key = llm_config.get("apiKey").and_then(Value::as_str).unwrap_or("").to_string();
+    builder = builder.body(provider_body.to_string());
 
     let result = tauri::async_runtime::block_on(async move {
-        let mut builder = client
-            .post(endpoint)
-            .header("content-type", "application/json")
-            .json(&payload);
-        if !api_key.trim().is_empty() {
-            builder = builder.bearer_auth(api_key);
-        }
         match builder.send().await {
             Ok(resp) => {
                 let status = resp.status().as_u16();
-                let text = resp.text().await.unwrap_or_default();
-                if !(200..300).contains(&status) {
-                    return (status, json!({ "ok": false, "error": text }).to_string().into_bytes());
-                }
-                match serde_json::from_str::<Value>(&text) {
-                    Ok(json_body) => {
-                        let answer = extract_chat_answer(&json_body);
-                        (200, json!({
-                            "ok": true,
-                            "projectId": project_id,
-                            "provider": provider,
-                            "answer": answer,
-                            "raw": json_body,
-                        }).to_string().into_bytes())
-                    }
-                    Err(err) => (502, json!({ "ok": false, "error": format!("Invalid LLM JSON response: {err}") }).to_string().into_bytes()),
-                }
+                let content_type = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                let bytes = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+                (status, content_type, bytes)
             }
-            Err(err) => (502, json!({ "ok": false, "error": format!("LLM request failed: {err}") }).to_string().into_bytes()),
+            Err(err) => {
+                let body = json!({ "ok": false, "error": format!("LLM request failed: {err}") });
+                (502, "application/json".to_string(), body.to_string().into_bytes())
+            }
         }
     });
 
-    respond_json(request, result.0, result.1);
+    respond_bytes(request, result.0, &result.1, result.2);
 }
 
-fn chat_completion_endpoint(config: &Value) -> Result<String, String> {
-    let provider = config.get("provider").and_then(Value::as_str).unwrap_or("custom");
-    match provider {
-        "openai" => Ok("https://api.openai.com/v1/chat/completions".to_string()),
-        "custom" => {
-            let endpoint = config.get("customEndpoint").and_then(Value::as_str).unwrap_or("").trim();
-            if endpoint.is_empty() {
-                Err("Missing llmConfig.customEndpoint".to_string())
-            } else if endpoint.ends_with("/chat/completions") {
-                Ok(endpoint.to_string())
-            } else {
-                Ok(format!("{}/chat/completions", endpoint.trim_end_matches('/')))
-            }
-        }
-        "ollama" => {
-            let endpoint = config.get("ollamaUrl").and_then(Value::as_str).unwrap_or("").trim();
-            if endpoint.is_empty() {
-                Err("Missing llmConfig.ollamaUrl".to_string())
-            } else {
-                Ok(format!("{}/v1/chat/completions", endpoint.trim_end_matches('/')))
-            }
-        }
-        other => Err(format!("Web Chat API currently supports openai/custom/ollama providers, got: {other}")),
-    }
+fn is_allowed_http_url(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
 }
 
-fn extract_chat_answer(json_body: &Value) -> String {
-    let content = json_body
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"));
-    match content {
-        Some(Value::String(s)) => s.clone(),
-        Some(value) => value.to_string(),
-        None => "".to_string(),
+fn is_safe_forward_header(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return false;
     }
+    !matches!(
+        lower.as_str(),
+        "host" | "content-length" | "connection" | "transfer-encoding" | "accept-encoding"
+    )
 }
 
 fn read_body(request: &mut tiny_http::Request) -> Result<Vec<u8>, (u16, Value)> {
@@ -145,14 +97,14 @@ fn read_json_body(request: &mut tiny_http::Request) -> Result<Value, (u16, Value
 }
 
 fn respond_value(request: tiny_http::Request, status: u16, body: Value) {
-    respond_json(request, status, body.to_string().into_bytes());
+    respond_bytes(request, status, "application/json", body.to_string().into_bytes());
 }
 
-fn respond_json(request: tiny_http::Request, status: u16, body: Vec<u8>) {
+fn respond_bytes(request: tiny_http::Request, status: u16, content_type: &str, body: Vec<u8>) {
     let mut response = Response::from_data(body).with_status_code(StatusCode(status));
     response.add_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
     response.add_header(Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS").unwrap());
     response.add_header(Header::from_bytes("Access-Control-Allow-Headers", "Content-Type, Authorization, X-LLM-Wiki-Token").unwrap());
-    response.add_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+    response.add_header(Header::from_bytes("Content-Type", content_type).unwrap());
     let _ = request.respond(response);
 }
