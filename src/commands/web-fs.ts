@@ -20,7 +20,7 @@ export async function listCurrentWebProjectDirectory(
 }
 
 export async function readCurrentWebProjectFile(relativePath: string, options?: HttpCommandOptions): Promise<string> {
-  const res = await apiProjectReadFile("current", relativePath, options)
+  const res = await apiProjectReadFile("current", relativePath, undefined, options)
   return res.content
 }
 
