@@ -47,6 +47,7 @@ const requiredPaths = [
   'src-tauri/src/web_api_proxy.rs',
   'src/commands/fs.ts',
   'src/lib/persist.ts',
+  'src/components/project/welcome-screen.tsx',
   'src/App.tsx',
   'deploy-web.sh',
   'deploy-web.bat',
