@@ -25,6 +25,12 @@ export interface ApiProjectsResponse {
   currentProject: ApiProjectEntry | null
 }
 
+export interface ApiCreateProjectResponse {
+  ok: boolean
+  name: string
+  path: string
+}
+
 export interface ApiFileNode {
   name: string
   path: string
@@ -48,10 +54,46 @@ export interface ApiFileContentResponse {
   content: string
 }
 
+export interface ApiFileBase64Response {
+  ok: boolean
+  projectId: string
+  path: string
+  base64: string
+  mimeType: string
+}
+
 export interface ApiWriteResponse {
   ok: boolean
   projectId: string
   path: string
+}
+
+export interface ApiCopyDirectoryResponse {
+  ok: boolean
+  projectId: string
+  files: string[]
+}
+
+export interface ApiFileMetadataResponse {
+  ok: boolean
+  projectId: string
+  path: string
+  modifiedTime: number
+  size: number
+  md5: string
+}
+
+export interface ApiRelatedWikiPagesResponse {
+  ok: boolean
+  projectId: string
+  pages: string[]
+}
+
+export interface ApiPreprocessResponse {
+  ok: boolean
+  projectId: string
+  path: string
+  content: string
 }
 
 export interface ApiReviewsResponse {
@@ -101,6 +143,14 @@ export function apiProjects(options?: HttpCommandOptions): Promise<ApiProjectsRe
   return httpGet<ApiProjectsResponse>("/api/v1/projects", options)
 }
 
+export function apiCreateProject(
+  name: string,
+  path: string,
+  options?: HttpCommandOptions,
+): Promise<ApiCreateProjectResponse> {
+  return httpPost<ApiCreateProjectResponse>("/api/v1/projects/create", { name, path }, options)
+}
+
 export function apiProjectFiles(
   projectId: string,
   params: { root?: "wiki" | "sources" | "raw" | "all"; recursive?: boolean; maxFiles?: number } = {},
@@ -131,6 +181,14 @@ export function apiProjectReadFile(
   return httpPost<ApiFileContentResponse>(projectApiPath(projectId, "/files/read"), { path }, options)
 }
 
+export function apiProjectReadFileBase64(
+  projectId: string,
+  path: string,
+  options?: HttpCommandOptions,
+): Promise<ApiFileBase64Response> {
+  return httpPost<ApiFileBase64Response>(projectApiPath(projectId, "/files/read-base64"), { path }, options)
+}
+
 export function apiProjectWriteFile(
   projectId: string,
   path: string,
@@ -138,6 +196,15 @@ export function apiProjectWriteFile(
   options?: HttpCommandOptions,
 ): Promise<ApiWriteResponse> {
   return httpPost<ApiWriteResponse>(projectApiPath(projectId, "/files/write"), { path, contents }, options)
+}
+
+export function apiProjectWriteFileBase64(
+  projectId: string,
+  path: string,
+  base64: string,
+  options?: HttpCommandOptions,
+): Promise<ApiWriteResponse> {
+  return httpPost<ApiWriteResponse>(projectApiPath(projectId, "/files/write-base64"), { path, base64 }, options)
 }
 
 export function apiProjectWriteFileAtomic(
@@ -163,6 +230,48 @@ export function apiProjectCreateDirectory(
   options?: HttpCommandOptions,
 ): Promise<ApiWriteResponse> {
   return httpPost<ApiWriteResponse>(projectApiPath(projectId, "/directories/create"), { path }, options)
+}
+
+export function apiProjectCopyFile(
+  projectId: string,
+  source: string,
+  destination: string,
+  options?: HttpCommandOptions,
+): Promise<ApiWriteResponse> {
+  return httpPost<ApiWriteResponse>(projectApiPath(projectId, "/files/copy"), { source, destination }, options)
+}
+
+export function apiProjectCopyDirectory(
+  projectId: string,
+  source: string,
+  destination: string,
+  options?: HttpCommandOptions,
+): Promise<ApiCopyDirectoryResponse> {
+  return httpPost<ApiCopyDirectoryResponse>(projectApiPath(projectId, "/directories/copy"), { source, destination }, options)
+}
+
+export function apiProjectPreprocessFile(
+  projectId: string,
+  path: string,
+  options?: HttpCommandOptions,
+): Promise<ApiPreprocessResponse> {
+  return httpPost<ApiPreprocessResponse>(projectApiPath(projectId, "/files/preprocess"), { path }, options)
+}
+
+export function apiProjectFileMetadata(
+  projectId: string,
+  path: string,
+  options?: HttpCommandOptions,
+): Promise<ApiFileMetadataResponse> {
+  return httpPost<ApiFileMetadataResponse>(projectApiPath(projectId, "/files/metadata"), { path }, options)
+}
+
+export function apiProjectRelatedWikiPages(
+  projectId: string,
+  sourceName: string,
+  options?: HttpCommandOptions,
+): Promise<ApiRelatedWikiPagesResponse> {
+  return httpPost<ApiRelatedWikiPagesResponse>(projectApiPath(projectId, "/wiki/related-pages"), { sourceName }, options)
 }
 
 export function apiProjectReviews(
