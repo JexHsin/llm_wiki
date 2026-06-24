@@ -123,6 +123,14 @@ export function apiProjectFileContent(
   return httpGet<ApiFileContentResponse>(projectApiPath(projectId, `/files/content?${query}`), options)
 }
 
+export function apiProjectReadFile(
+  projectId: string,
+  path: string,
+  options?: HttpCommandOptions,
+): Promise<ApiFileContentResponse> {
+  return httpPost<ApiFileContentResponse>(projectApiPath(projectId, "/files/read"), { path }, options)
+}
+
 export function apiProjectWriteFile(
   projectId: string,
   path: string,
