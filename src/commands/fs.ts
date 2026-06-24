@@ -3,13 +3,21 @@ import type { FileNode, WikiProject } from "@/types/wiki"
 import { ensureProjectId, upsertProjectInfo } from "@/lib/project-identity"
 import { isAbsolutePath } from "@/lib/path-utils"
 import {
+  apiCreateProject,
   apiHealth,
+  apiProjectCopyDirectory,
+  apiProjectCopyFile,
   apiProjectCreateDirectory,
   apiProjectDeleteFile,
+  apiProjectFileMetadata,
   apiProjectFiles,
+  apiProjectPreprocessFile,
   apiProjectReadFile,
+  apiProjectReadFileBase64,
+  apiProjectRelatedWikiPages,
   apiProjectWriteFile,
   apiProjectWriteFileAtomic,
+  apiProjectWriteFileBase64,
   apiProjects,
 } from "@/commands/http-api"
 import { toFileNode, toWikiProject } from "@/commands/web-equivalent"
@@ -115,7 +123,11 @@ export async function writeFile(path: string, contents: string): Promise<void> {
 }
 
 export async function writeFileBase64(path: string, base64: string): Promise<void> {
-  assertWebUnsupported("writeFileBase64")
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    await apiProjectWriteFileBase64(project.id, path, base64)
+    return
+  }
   assertAbsoluteFsPath("writeFileBase64", path)
   return invoke<void>("write_file_base64", { path, base64 })
 }
@@ -152,7 +164,11 @@ export async function copyFile(
   source: string,
   destination: string
 ): Promise<void> {
-  assertWebUnsupported("copyFile")
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(source)
+    await apiProjectCopyFile(project.id, source, destination)
+    return
+  }
   return invoke("copy_file", { source, destination })
 }
 
@@ -160,12 +176,20 @@ export async function copyDirectory(
   source: string,
   destination: string
 ): Promise<string[]> {
-  assertWebUnsupported("copyDirectory")
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(source)
+    const res = await apiProjectCopyDirectory(project.id, source, destination)
+    return res.files
+  }
   return invoke<string[]>("copy_directory", { source, destination })
 }
 
 export async function preprocessFile(path: string): Promise<string> {
-  assertWebUnsupported("preprocessFile")
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    const res = await apiProjectPreprocessFile(project.id, path)
+    return res.content
+  }
   return invoke<string>("preprocess_file", { path })
 }
 
@@ -182,6 +206,11 @@ export async function findRelatedWikiPages(
   projectPath: string,
   sourceName: string
 ): Promise<string[]> {
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(projectPath)
+    const res = await apiProjectRelatedWikiPages(project.id, sourceName)
+    return res.pages
+  }
   return invoke<string[]>("find_related_wiki_pages", { projectPath, sourceName })
 }
 
@@ -213,14 +242,29 @@ export async function fileExists(path: string): Promise<boolean> {
 }
 
 export async function getFileModifiedTime(path: string): Promise<number> {
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    const metadata = await apiProjectFileMetadata(project.id, path)
+    return metadata.modifiedTime
+  }
   return invoke<number>("get_file_modified_time", { path })
 }
 
 export async function getFileSize(path: string): Promise<number> {
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    const metadata = await apiProjectFileMetadata(project.id, path)
+    return metadata.size
+  }
   return invoke<number>("get_file_size", { path })
 }
 
 export async function getFileMd5(path: string): Promise<string> {
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    const metadata = await apiProjectFileMetadata(project.id, path)
+    return metadata.md5
+  }
   return invoke<string>("get_file_md5", { path })
 }
 
@@ -243,7 +287,11 @@ export interface FileBase64 {
  * valid UTF-8 — `readFile` would corrupt them).
  */
 export async function readFileAsBase64(path: string): Promise<FileBase64> {
-  assertWebUnsupported("readFileAsBase64")
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    const res = await apiProjectReadFileBase64(project.id, path)
+    return { base64: res.base64, mimeType: res.mimeType }
+  }
   return invoke<FileBase64>("read_file_as_base64", { path })
 }
 
@@ -251,7 +299,12 @@ export async function createProject(
   name: string,
   path: string,
 ): Promise<WikiProject> {
-  assertWebUnsupported("createProject")
+  if (isWebMode()) {
+    const raw = await apiCreateProject(name, path)
+    const id = await ensureProjectId(raw.path)
+    await upsertProjectInfo(id, raw.path, raw.name)
+    return { id, name: raw.name, path: raw.path }
+  }
   const raw = await invoke<RawProject>("create_project", { name, path })
   const id = await ensureProjectId(raw.path)
   await upsertProjectInfo(id, raw.path, raw.name)
