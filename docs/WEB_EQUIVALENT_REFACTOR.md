@@ -60,11 +60,18 @@ Required test groups:
 - HTTP auth/CORS/0.0.0.0 bind tests
 - Linux and Windows deploy smoke tests
 
+## Transitional public API bridge
+
+The original Rust API remains the source of truth on `127.0.0.1:19828`. To avoid rewriting or duplicating business logic, this branch adds `src-tauri/src/web_api_proxy.rs`, which exposes a public bridge on `0.0.0.0:${LLM_WIKI_WEB_PORT:-19830}` and forwards requests to the original local API.
+
+This is a migration bridge, not a new knowledge-base implementation. The final serviceized version should move the original API bind address itself to `0.0.0.0` after the full command-equivalence test suite is in place.
+
 ## Current branch status
 
 This branch currently contains the safe foundation only:
 
 - `src/lib/http-command-client.ts`
+- `src-tauri/src/web_api_proxy.rs`
 - `scripts/check-web-equivalence.mjs`
 - `deploy-web.sh`
 - `deploy-web.bat`
