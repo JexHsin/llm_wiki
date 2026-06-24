@@ -5,6 +5,7 @@ mod panic_guard;
 mod proxy;
 mod tray;
 mod types;
+mod web_api_proxy;
 
 use panic_guard::run_guarded;
 use std::sync::Mutex;
@@ -185,6 +186,7 @@ pub fn run() {
             // Start the API before optional desktop integrations so the
             // backend is reachable if tray setup or another integration fails.
             api_server::start_api_server(app.handle().clone());
+            web_api_proxy::start_web_api_proxy(app.handle().clone());
             let tray_available = match tray::create_tray(app.handle()) {
                 Ok(()) => true,
                 Err(err) => {
