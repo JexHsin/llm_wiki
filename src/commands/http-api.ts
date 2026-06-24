@@ -48,6 +48,12 @@ export interface ApiFileContentResponse {
   content: string
 }
 
+export interface ApiWriteResponse {
+  ok: boolean
+  projectId: string
+  path: string
+}
+
 export interface ApiReviewsResponse {
   ok: boolean
   projectId: string
@@ -109,6 +115,40 @@ export function apiProjectFileContent(
 ): Promise<ApiFileContentResponse> {
   const query = new URLSearchParams({ path })
   return httpGet<ApiFileContentResponse>(projectApiPath(projectId, `/files/content?${query}`), options)
+}
+
+export function apiProjectWriteFile(
+  projectId: string,
+  path: string,
+  contents: string,
+  options?: HttpCommandOptions,
+): Promise<ApiWriteResponse> {
+  return httpPost<ApiWriteResponse>(projectApiPath(projectId, "/files/write"), { path, contents }, options)
+}
+
+export function apiProjectWriteFileAtomic(
+  projectId: string,
+  path: string,
+  contents: string,
+  options?: HttpCommandOptions,
+): Promise<ApiWriteResponse> {
+  return httpPost<ApiWriteResponse>(projectApiPath(projectId, "/files/write-atomic"), { path, contents }, options)
+}
+
+export function apiProjectDeleteFile(
+  projectId: string,
+  path: string,
+  options?: HttpCommandOptions,
+): Promise<ApiWriteResponse> {
+  return httpPost<ApiWriteResponse>(projectApiPath(projectId, "/files/delete"), { path }, options)
+}
+
+export function apiProjectCreateDirectory(
+  projectId: string,
+  path: string,
+  options?: HttpCommandOptions,
+): Promise<ApiWriteResponse> {
+  return httpPost<ApiWriteResponse>(projectApiPath(projectId, "/directories/create"), { path }, options)
 }
 
 export function apiProjectReviews(
