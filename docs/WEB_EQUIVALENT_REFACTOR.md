@@ -27,13 +27,20 @@ The correct migration is not to build a new RAG engine. The original project alr
 
 ### Completed read-only substitutions
 
-When `VITE_LLM_WIKI_WEB_MODE=true`, the following read-only paths now use HTTP instead of direct Tauri invoke calls:
+When `VITE_LLM_WIKI_WEB_MODE=true`, the following paths now use HTTP instead of direct Tauri invoke calls:
 
 - `src/commands/fs.ts`
   - `readFile`
   - `listDirectory`
   - `openProject`
   - `apiServerStatus`
+  - `writeFile`
+  - `writeFileAtomic`
+  - `deleteFile`
+  - `createDirectory`
+  - `fileExists`
+- `src/lib/llm-client.ts`
+  - `streamChat` delegates to `/chat` in Web mode, while desktop mode keeps the original streaming provider pipeline.
 - `src/lib/search.ts`
   - `searchWiki` uses the existing `/search` API instead of direct `invoke("search_project")`.
 - `src/lib/wiki-graph.ts`
@@ -50,7 +57,7 @@ Desktop mode remains unchanged unless `VITE_LLM_WIKI_WEB_MODE=true` is set.
 
 ### Web-mode write safeguards
 
-Until command-equivalent write endpoints are implemented, `src/commands/fs.ts` blocks write/delete/project-create operations in Web mode instead of falling through to Tauri commands. This prevents Review/Lint fix actions from accidentally depending on the desktop shell while the Web migration is still read-only for those paths.
+Project-scoped write endpoints are implemented in the Web proxy for write/delete/create-directory operations. Paths are resolved against the current project and rejected if they escape the project root. Unsupported binary/project-management operations still fail fast in Web mode instead of falling through to Tauri.
 
 ### Phase 2: Backend serviceization
 
@@ -91,11 +98,18 @@ Required test groups:
 
 ## Transitional public API bridge
 
-The original Rust API remains the source of truth on `127.0.0.1:19828`. To avoid rewriting or duplicating business logic, this branch adds `src-tauri/src/web_api_proxy.rs`, which exposes a public bridge on `0.0.0.0:${LLM_WIKI_WEB_PORT:-19830}` and forwards requests to the original local API.
+The original Rust API remains the source of truth on `127.0.0.1:19828`. To avoid rewriting or duplicating business logic, this branch adds `src-tauri/src/web_api_proxy.rs`, which exposes a public bridge on `0.0.0.0:${LLM_WIKI_WEB_PORT:-19830}` and forwards to the original local API.
 
-The bridge also exposes `GET /api/v1/projects/{projectId}/lint` as a read-only compatibility endpoint for `.llm-wiki/lint.json`, because the original local API did not yet include a Lint read endpoint.
+The bridge also exposes compatibility endpoints that the original local API did not yet include:
 
-This is a migration bridge, not a new knowledge-base implementation. The final serviceized version should move the original API bind address itself to `0.0.0.0` after the full command-equivalence test suite is in place.
+- `GET /api/v1/projects/{projectId}/lint`
+- `POST /api/v1/projects/{projectId}/files/write`
+- `POST /api/v1/projects/{projectId}/files/write-atomic`
+- `POST /api/v1/projects/{projectId}/files/delete`
+- `POST /api/v1/projects/{projectId}/directories/create`
+- `POST /api/v1/projects/{projectId}/chat`
+
+This is a migration bridge, not a new knowledge-base implementation. The final serviceized version should move these endpoints into the original API server once full command-equivalence tests are in place.
 
 ## Environment
 
@@ -111,18 +125,4 @@ LLM_WIKI_WEB_PORT=19830
 
 ## Current branch status
 
-This branch currently contains the safe foundation only:
-
-- `src/lib/http-command-client.ts`
-- `src/lib/web-mode.ts`
-- `src/commands/http-api.ts`
-- `src/commands/web-equivalent.ts`
-- `src/commands/web-fs.ts`
-- `src/commands/web-projects.ts`
-- `src/commands/web-graph.ts`
-- `src-tauri/src/web_api_proxy.rs`
-- `scripts/check-web-equivalence.mjs`
-- `deploy-web.sh`
-- `deploy-web.bat`
-
-It intentionally does not include the earlier standalone RAG kernel because that violated the strict equivalence constraints.
+This branch currently contains the strict Web-equivalence foundation and compatibility API bridge. It intentionally does not include the earlier standalone RAG kernel because that violated the strict equivalence constraints.
