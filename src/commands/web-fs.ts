@@ -1,5 +1,5 @@
 import type { FileNode, WikiProject } from "@/types/wiki"
-import { apiProjectFileContent, apiProjectFiles, apiProjects } from "@/commands/http-api"
+import { apiProjectFiles, apiProjectReadFile, apiProjects } from "@/commands/http-api"
 import { toFileNode, toWikiProject } from "@/commands/web-equivalent"
 import type { HttpCommandOptions } from "@/lib/http-command-client"
 
@@ -20,7 +20,7 @@ export async function listCurrentWebProjectDirectory(
 }
 
 export async function readCurrentWebProjectFile(relativePath: string, options?: HttpCommandOptions): Promise<string> {
-  const res = await apiProjectFileContent("current", relativePath, options)
+  const res = await apiProjectReadFile("current", relativePath, options)
   return res.content
 }
 
