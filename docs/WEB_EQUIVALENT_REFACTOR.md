@@ -34,6 +34,8 @@ When `VITE_LLM_WIKI_WEB_MODE=true`, the following read-only paths now use HTTP i
   - `listDirectory`
   - `openProject`
   - `apiServerStatus`
+- `src/lib/search.ts`
+  - `searchWiki` uses the existing `/search` API instead of direct `invoke("search_project")`.
 - `src/lib/wiki-graph.ts`
   - `buildWikiGraph` delegates to `src/commands/web-graph.ts`, which reads the existing `/graph` API via `getWebProjectGraph()` / `apiProjectGraph()`.
 - `src/lib/persist.ts`
@@ -45,6 +47,10 @@ When `VITE_LLM_WIKI_WEB_MODE=true`, the following read-only paths now use HTTP i
   - project list/current project helpers are available for the project selection UI migration.
 
 Desktop mode remains unchanged unless `VITE_LLM_WIKI_WEB_MODE=true` is set.
+
+### Web-mode write safeguards
+
+Until command-equivalent write endpoints are implemented, `src/commands/fs.ts` blocks write/delete/project-create operations in Web mode instead of falling through to Tauri commands. This prevents Review/Lint fix actions from accidentally depending on the desktop shell while the Web migration is still read-only for those paths.
 
 ### Phase 2: Backend serviceization
 
