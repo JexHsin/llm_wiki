@@ -1,5 +1,5 @@
 import { writeFile, readFile, createDirectory } from "@/commands/fs"
-import { apiProjectReviews } from "@/commands/http-api"
+import { apiProjectLint, apiProjectReviews } from "@/commands/http-api"
 import type { ReviewItem } from "@/stores/review-store"
 import type { LintItem } from "@/stores/lint-store"
 import type { DisplayMessage, Conversation } from "@/stores/chat-store"
@@ -42,6 +42,14 @@ export async function saveLintItems(projectPath: string, items: LintItem[]): Pro
 }
 
 export async function loadLintItems(projectPath: string): Promise<LintItem[]> {
+  if (isWebMode()) {
+    try {
+      const res = await apiProjectLint("current", { limit: 1000 })
+      return res.lint as LintItem[]
+    } catch {
+      return []
+    }
+  }
   const pp = normalizePath(projectPath)
   try {
     const content = await readFile(`${pp}/.llm-wiki/lint.json`)
