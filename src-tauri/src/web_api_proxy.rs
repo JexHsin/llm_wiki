@@ -14,7 +14,7 @@ mod web_chat;
 
 const DEFAULT_PUBLIC_PORT: u16 = 19830;
 const UPSTREAM: &str = "http://127.0.0.1:19828";
-const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 pub fn start_web_api_proxy(app: AppHandle) {
     thread::spawn(move || {
@@ -115,6 +115,14 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
             handle_related_pages(app, request, &project_id);
             return;
         }
+        if let Some((project_id, action)) = vector_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
+            handle_project_vector(app, request, &project_id, &action);
+            return;
+        }
         if let Some((project_id, action)) = copy_route(request.url()) {
             if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
                 respond_value(request, status, body);
@@ -200,13 +208,16 @@ fn read_json_body(request: &mut tiny_http::Request) -> Result<Value, (u16, Value
         .map_err(|err| (400, json!({ "ok": false, "error": format!("Invalid JSON body: {err}") })))
 }
 
-fn lint_route(url: &str) -> Option<(String, String)> {
-    let (path, query) = url.split_once('?').unwrap_or((url, ""));
-    let parts = path
-        .trim_start_matches("/api/v1/")
+fn route_parts(url: &str) -> Vec<&str> {
+    let (path, _) = url.split_once('?').unwrap_or((url, ""));
+    path.trim_start_matches("/api/v1/")
         .split('/')
-        .collect::<Vec<_>>();
-    match parts.as_slice() {
+        .collect::<Vec<_>>()
+}
+
+fn lint_route(url: &str) -> Option<(String, String)> {
+    let (_, query) = url.split_once('?').unwrap_or((url, ""));
+    match route_parts(url).as_slice() {
         ["projects", project_id, "lint"] => Some((percent_decode(project_id), query.to_string())),
         _ => None,
     }
@@ -218,84 +229,63 @@ fn create_project_route(url: &str) -> bool {
 }
 
 fn chat_route(url: &str) -> Option<String> {
-    let (path, _) = url.split_once('?').unwrap_or((url, ""));
-    let parts = path
-        .trim_start_matches("/api/v1/")
-        .split('/')
-        .collect::<Vec<_>>();
-    match parts.as_slice() {
+    match route_parts(url).as_slice() {
         ["projects", project_id, "chat"] => Some(percent_decode(project_id)),
         _ => None,
     }
 }
 
 fn read_route(url: &str) -> Option<String> {
-    let (path, _) = url.split_once('?').unwrap_or((url, ""));
-    let parts = path
-        .trim_start_matches("/api/v1/")
-        .split('/')
-        .collect::<Vec<_>>();
-    match parts.as_slice() {
+    match route_parts(url).as_slice() {
         ["projects", project_id, "files", "read"] => Some(percent_decode(project_id)),
         _ => None,
     }
 }
 
 fn read_base64_route(url: &str) -> Option<String> {
-    let (path, _) = url.split_once('?').unwrap_or((url, ""));
-    let parts = path
-        .trim_start_matches("/api/v1/")
-        .split('/')
-        .collect::<Vec<_>>();
-    match parts.as_slice() {
+    match route_parts(url).as_slice() {
         ["projects", project_id, "files", "read-base64"] => Some(percent_decode(project_id)),
         _ => None,
     }
 }
 
 fn metadata_route(url: &str) -> Option<String> {
-    let (path, _) = url.split_once('?').unwrap_or((url, ""));
-    let parts = path
-        .trim_start_matches("/api/v1/")
-        .split('/')
-        .collect::<Vec<_>>();
-    match parts.as_slice() {
+    match route_parts(url).as_slice() {
         ["projects", project_id, "files", "metadata"] => Some(percent_decode(project_id)),
         _ => None,
     }
 }
 
 fn preprocess_route(url: &str) -> Option<String> {
-    let (path, _) = url.split_once('?').unwrap_or((url, ""));
-    let parts = path
-        .trim_start_matches("/api/v1/")
-        .split('/')
-        .collect::<Vec<_>>();
-    match parts.as_slice() {
+    match route_parts(url).as_slice() {
         ["projects", project_id, "files", "preprocess"] => Some(percent_decode(project_id)),
         _ => None,
     }
 }
 
 fn related_pages_route(url: &str) -> Option<String> {
-    let (path, _) = url.split_once('?').unwrap_or((url, ""));
-    let parts = path
-        .trim_start_matches("/api/v1/")
-        .split('/')
-        .collect::<Vec<_>>();
-    match parts.as_slice() {
+    match route_parts(url).as_slice() {
         ["projects", project_id, "wiki", "related-pages"] => Some(percent_decode(project_id)),
         _ => None,
     }
 }
 
+fn vector_route(url: &str) -> Option<(String, String)> {
+    match route_parts(url).as_slice() {
+        ["projects", project_id, "vectors", "chunks", "upsert"] => Some((percent_decode(project_id), "chunks_upsert".to_string())),
+        ["projects", project_id, "vectors", "chunks", "search"] => Some((percent_decode(project_id), "chunks_search".to_string())),
+        ["projects", project_id, "vectors", "pages", "delete"] => Some((percent_decode(project_id), "page_delete".to_string())),
+        ["projects", project_id, "vectors", "chunks", "count"] => Some((percent_decode(project_id), "chunks_count".to_string())),
+        ["projects", project_id, "vectors", "chunks", "clear"] => Some((percent_decode(project_id), "chunks_clear".to_string())),
+        ["projects", project_id, "vectors", "chunks", "optimize"] => Some((percent_decode(project_id), "chunks_optimize".to_string())),
+        ["projects", project_id, "vectors", "legacy", "count"] => Some((percent_decode(project_id), "legacy_count".to_string())),
+        ["projects", project_id, "vectors", "legacy", "drop"] => Some((percent_decode(project_id), "legacy_drop".to_string())),
+        _ => None,
+    }
+}
+
 fn copy_route(url: &str) -> Option<(String, String)> {
-    let (path, _) = url.split_once('?').unwrap_or((url, ""));
-    let parts = path
-        .trim_start_matches("/api/v1/")
-        .split('/')
-        .collect::<Vec<_>>();
-    match parts.as_slice() {
+    match route_parts(url).as_slice() {
         ["projects", project_id, "files", "copy"] => Some((percent_decode(project_id), "copy_file".to_string())),
         ["projects", project_id, "directories", "copy"] => Some((percent_decode(project_id), "copy_directory".to_string())),
         _ => None,
@@ -303,12 +293,7 @@ fn copy_route(url: &str) -> Option<(String, String)> {
 }
 
 fn write_route(url: &str) -> Option<(String, String)> {
-    let (path, _) = url.split_once('?').unwrap_or((url, ""));
-    let parts = path
-        .trim_start_matches("/api/v1/")
-        .split('/')
-        .collect::<Vec<_>>();
-    match parts.as_slice() {
+    match route_parts(url).as_slice() {
         ["projects", project_id, "files", "write"] => Some((percent_decode(project_id), "write_file".to_string())),
         ["projects", project_id, "files", "write-base64"] => Some((percent_decode(project_id), "write_file_base64".to_string())),
         ["projects", project_id, "files", "write-atomic"] => Some((percent_decode(project_id), "write_file_atomic".to_string())),
@@ -385,18 +370,10 @@ fn handle_project_read_base64(app: AppHandle, mut request: tiny_http::Request, p
         respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
         return;
     };
-    let body = match read_json_body(&mut request) {
-        Ok(body) => body,
-        Err((status, body)) => {
-            respond_value(request, status, body);
-            return;
-        }
-    };
-    let Some(raw_path) = body.get("path").and_then(Value::as_str) else {
-        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: path" }));
+    let Some(raw_path) = body_string(&mut request, "path") else {
         return;
     };
-    let target = match resolve_project_scoped_path(&project_path, raw_path) {
+    let target = match resolve_project_scoped_path(&project_path, &raw_path) {
         Ok(path) => path,
         Err(err) => {
             respond_value(request, 400, json!({ "ok": false, "error": err }));
@@ -414,6 +391,17 @@ fn handle_project_read_base64(app: AppHandle, mut request: tiny_http::Request, p
         })),
         Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
     }
+}
+
+fn body_string(request: &mut tiny_http::Request, field: &str) -> Option<String> {
+    let body = match read_json_body(request) {
+        Ok(body) => body,
+        Err((status, body)) => {
+            respond_value(request.clone(), status, body);
+            return None;
+        }
+    };
+    body.get(field).and_then(Value::as_str).map(ToOwned::to_owned)
 }
 
 fn handle_project_metadata(app: AppHandle, mut request: tiny_http::Request, project_id: &str) {
@@ -529,6 +517,86 @@ fn handle_related_pages(app: AppHandle, mut request: tiny_http::Request, project
             "pages": pages,
         })),
         Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+    }
+}
+
+fn handle_project_vector(app: AppHandle, mut request: tiny_http::Request, project_id: &str, action: &str) {
+    let Some((resolved_id, project_path)) = resolve_project(&app, project_id) else {
+        respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
+        return;
+    };
+    let body = match read_json_body(&mut request) {
+        Ok(body) => body,
+        Err((status, body)) => {
+            respond_value(request, status, body);
+            return;
+        }
+    };
+
+    match action {
+        "chunks_upsert" => {
+            let Some(page_id) = body.get("pageId").and_then(Value::as_str) else {
+                respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: pageId" }));
+                return;
+            };
+            let chunks_value = body.get("chunks").cloned().unwrap_or_else(|| json!([]));
+            let chunks = match serde_json::from_value::<Vec<commands::vectorstore::ChunkUpsertInput>>(chunks_value) {
+                Ok(chunks) => chunks,
+                Err(err) => {
+                    respond_value(request, 400, json!({ "ok": false, "error": format!("Invalid chunks payload: {err}") }));
+                    return;
+                }
+            };
+            match tauri::async_runtime::block_on(commands::vectorstore::vector_upsert_chunks(project_path, page_id.to_string(), chunks)) {
+                Ok(()) => respond_value(request, 200, json!({ "ok": true, "projectId": resolved_id })),
+                Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+            }
+        }
+        "chunks_search" => {
+            let query_embedding = match serde_json::from_value::<Vec<f32>>(body.get("queryEmbedding").cloned().unwrap_or_else(|| json!([]))) {
+                Ok(vec) => vec,
+                Err(err) => {
+                    respond_value(request, 400, json!({ "ok": false, "error": format!("Invalid queryEmbedding payload: {err}") }));
+                    return;
+                }
+            };
+            let top_k = body.get("topK").and_then(Value::as_u64).unwrap_or(10) as usize;
+            match tauri::async_runtime::block_on(commands::vectorstore::vector_search_chunks(project_path, query_embedding, top_k)) {
+                Ok(results) => respond_value(request, 200, json!({ "ok": true, "projectId": resolved_id, "results": results })),
+                Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+            }
+        }
+        "page_delete" => {
+            let Some(page_id) = body.get("pageId").and_then(Value::as_str) else {
+                respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: pageId" }));
+                return;
+            };
+            match tauri::async_runtime::block_on(commands::vectorstore::vector_delete_page(project_path, page_id.to_string())) {
+                Ok(()) => respond_value(request, 200, json!({ "ok": true, "projectId": resolved_id })),
+                Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+            }
+        }
+        "chunks_count" => match tauri::async_runtime::block_on(commands::vectorstore::vector_count_chunks(project_path)) {
+            Ok(count) => respond_value(request, 200, json!({ "ok": true, "projectId": resolved_id, "count": count })),
+            Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+        },
+        "chunks_clear" => match tauri::async_runtime::block_on(commands::vectorstore::vector_clear_chunks(project_path)) {
+            Ok(()) => respond_value(request, 200, json!({ "ok": true, "projectId": resolved_id })),
+            Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+        },
+        "chunks_optimize" => match tauri::async_runtime::block_on(commands::vectorstore::vector_optimize_chunks(project_path)) {
+            Ok(()) => respond_value(request, 200, json!({ "ok": true, "projectId": resolved_id })),
+            Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+        },
+        "legacy_count" => match tauri::async_runtime::block_on(commands::vectorstore::vector_legacy_row_count(project_path)) {
+            Ok(count) => respond_value(request, 200, json!({ "ok": true, "projectId": resolved_id, "count": count })),
+            Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+        },
+        "legacy_drop" => match tauri::async_runtime::block_on(commands::vectorstore::vector_drop_legacy(project_path)) {
+            Ok(()) => respond_value(request, 200, json!({ "ok": true, "projectId": resolved_id })),
+            Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
+        },
+        _ => respond_value(request, 400, json!({ "ok": false, "error": format!("Unsupported vector action: {action}") })),
     }
 }
 
@@ -688,7 +756,9 @@ fn resolve_project_scoped_path(project_path: &str, raw_path: &str) -> Result<Pat
         }
         return Ok(joined_canon);
     }
-    if let Some(parent) = joined.parent() {
+
+    let mut ancestor = joined.parent();
+    while let Some(parent) = ancestor {
         if parent.exists() {
             let parent_canon = parent
                 .canonicalize()
@@ -696,7 +766,9 @@ fn resolve_project_scoped_path(project_path: &str, raw_path: &str) -> Result<Pat
             if !parent_canon.starts_with(&root_canon) {
                 return Err("Resolved parent escapes project root".to_string());
             }
+            break;
         }
+        ancestor = parent.parent();
     }
     Ok(joined)
 }
