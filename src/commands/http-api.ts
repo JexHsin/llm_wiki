@@ -182,7 +182,7 @@ export function apiProjectLint(
 
 export function apiProjectSearch(
   projectId: string,
-  body: { query: string; maxResults?: number },
+  body: { query: string; topK?: number; includeContent?: boolean; queryEmbedding?: number[] | null },
   options?: HttpCommandOptions,
 ): Promise<ApiSearchResponse> {
   return httpPost<ApiSearchResponse>(projectApiPath(projectId, "/search"), body, options)
