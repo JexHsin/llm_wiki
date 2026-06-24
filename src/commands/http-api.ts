@@ -176,9 +176,10 @@ export function apiProjectFileContent(
 export function apiProjectReadFile(
   projectId: string,
   path: string,
+  extractImages?: boolean,
   options?: HttpCommandOptions,
 ): Promise<ApiFileContentResponse> {
-  return httpPost<ApiFileContentResponse>(projectApiPath(projectId, "/files/read"), { path }, options)
+  return httpPost<ApiFileContentResponse>(projectApiPath(projectId, "/files/read"), { path, extractImages }, options)
 }
 
 export function apiProjectReadFileBase64(
