@@ -2,7 +2,16 @@ import { invoke } from "@tauri-apps/api/core"
 import type { FileNode, WikiProject } from "@/types/wiki"
 import { ensureProjectId, upsertProjectInfo } from "@/lib/project-identity"
 import { isAbsolutePath } from "@/lib/path-utils"
-import { apiHealth, apiProjectFileContent, apiProjectFiles, apiProjects } from "@/commands/http-api"
+import {
+  apiHealth,
+  apiProjectCreateDirectory,
+  apiProjectDeleteFile,
+  apiProjectFileContent,
+  apiProjectFiles,
+  apiProjectWriteFile,
+  apiProjectWriteFileAtomic,
+  apiProjects,
+} from "@/commands/http-api"
 import { toFileNode, toWikiProject } from "@/commands/web-equivalent"
 import { isWebMode } from "@/lib/web-mode"
 
@@ -12,9 +21,9 @@ interface RawProject {
   path: string
 }
 
-function assertWebWriteUnsupported(operation: string): void {
+function assertWebUnsupported(operation: string): void {
   if (isWebMode()) {
-    throw new Error(`${operation} is not available in Web mode until the equivalent HTTP write API is implemented`)
+    throw new Error(`${operation} is not available in Web mode until the equivalent HTTP API is implemented`)
   }
 }
 
@@ -68,19 +77,27 @@ export async function readFile(
 }
 
 export async function writeFile(path: string, contents: string): Promise<void> {
-  assertWebWriteUnsupported("writeFile")
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    await apiProjectWriteFile(project.id, path, contents)
+    return
+  }
   assertAbsoluteFsPath("writeFile", path)
   return invoke<void>("write_file", { path, contents })
 }
 
 export async function writeFileBase64(path: string, base64: string): Promise<void> {
-  assertWebWriteUnsupported("writeFileBase64")
+  assertWebUnsupported("writeFileBase64")
   assertAbsoluteFsPath("writeFileBase64", path)
   return invoke<void>("write_file_base64", { path, base64 })
 }
 
 export async function writeFileAtomic(path: string, contents: string): Promise<void> {
-  assertWebWriteUnsupported("writeFileAtomic")
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    await apiProjectWriteFileAtomic(project.id, path, contents)
+    return
+  }
   assertAbsoluteFsPath("writeFileAtomic", path)
   return invoke<void>("write_file_atomic", { path, contents })
 }
@@ -101,7 +118,7 @@ export async function copyFile(
   source: string,
   destination: string
 ): Promise<void> {
-  assertWebWriteUnsupported("copyFile")
+  assertWebUnsupported("copyFile")
   return invoke("copy_file", { source, destination })
 }
 
@@ -109,17 +126,21 @@ export async function copyDirectory(
   source: string,
   destination: string
 ): Promise<string[]> {
-  assertWebWriteUnsupported("copyDirectory")
+  assertWebUnsupported("copyDirectory")
   return invoke<string[]>("copy_directory", { source, destination })
 }
 
 export async function preprocessFile(path: string): Promise<string> {
-  assertWebWriteUnsupported("preprocessFile")
+  assertWebUnsupported("preprocessFile")
   return invoke<string>("preprocess_file", { path })
 }
 
 export async function deleteFile(path: string): Promise<void> {
-  assertWebWriteUnsupported("deleteFile")
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    await apiProjectDeleteFile(project.id, path)
+    return
+  }
   return invoke("delete_file", { path })
 }
 
@@ -131,7 +152,11 @@ export async function findRelatedWikiPages(
 }
 
 export async function createDirectory(path: string): Promise<void> {
-  assertWebWriteUnsupported("createDirectory")
+  if (isWebMode()) {
+    const project = await resolveWebProjectForPath(path)
+    await apiProjectCreateDirectory(project.id, path)
+    return
+  }
   assertAbsoluteFsPath("createDirectory", path)
   return invoke<void>("create_directory", { path })
 }
@@ -171,9 +196,7 @@ export interface FileBase64 {
  * valid UTF-8 — `readFile` would corrupt them).
  */
 export async function readFileAsBase64(path: string): Promise<FileBase64> {
-  if (isWebMode()) {
-    throw new Error("readFileAsBase64 is not available in Web mode until the equivalent HTTP binary-file API is implemented")
-  }
+  assertWebUnsupported("readFileAsBase64")
   return invoke<FileBase64>("read_file_as_base64", { path })
 }
 
@@ -181,7 +204,7 @@ export async function createProject(
   name: string,
   path: string,
 ): Promise<WikiProject> {
-  assertWebWriteUnsupported("createProject")
+  assertWebUnsupported("createProject")
   const raw = await invoke<RawProject>("create_project", { name, path })
   const id = await ensureProjectId(raw.path)
   await upsertProjectInfo(id, raw.path, raw.name)
@@ -206,7 +229,7 @@ export async function openProject(path: string): Promise<WikiProject> {
 }
 
 export async function openProjectFolder(path: string): Promise<void> {
-  assertWebWriteUnsupported("openProjectFolder")
+  assertWebUnsupported("openProjectFolder")
   return invoke<void>("open_project_folder", { path })
 }
 
@@ -223,7 +246,7 @@ export async function apiServerStatus(): Promise<string> {
 }
 
 export async function apiServerReloadConfig(): Promise<string> {
-  assertWebWriteUnsupported("apiServerReloadConfig")
+  assertWebUnsupported("apiServerReloadConfig")
   return invoke<string>("api_server_reload_config")
 }
 
