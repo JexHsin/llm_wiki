@@ -36,6 +36,8 @@ When `VITE_LLM_WIKI_WEB_MODE=true`, the following read-only paths now use HTTP i
   - `apiServerStatus`
 - `src/lib/persist.ts`
   - `loadReviewItems` uses the existing `/reviews` API instead of reading `.llm-wiki/review.json` directly.
+- `src/components/project/welcome-screen.tsx`
+  - recent/current project list uses the existing `/projects` API through `src/commands/web-projects.ts`.
 - `src/commands/web-projects.ts`
   - project list/current project helpers are available for the project selection UI migration.
 
