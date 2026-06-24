@@ -307,6 +307,7 @@ fn handle_project_write(app: AppHandle, mut request: tiny_http::Request, project
 }
 
 fn resolve_project_scoped_path(project_path: &str, raw_path: &str) -> Result<PathBuf, String> {
+    let project_root = PathBuf::from(project_path);
     let project_norm = normalize_path(project_path);
     let raw_norm = normalize_path(raw_path);
     let relative = if raw_norm == project_norm {
@@ -328,7 +329,31 @@ fn resolve_project_scoped_path(project_path: &str, raw_path: &str) -> Result<Pat
             }
         }
     }
-    Ok(Path::new(project_path).join(safe_relative))
+
+    let joined = project_root.join(&safe_relative);
+    let root_canon = project_root
+        .canonicalize()
+        .map_err(|err| format!("Failed to resolve project path: {err}"))?;
+    if joined.exists() {
+        let joined_canon = joined
+            .canonicalize()
+            .map_err(|err| format!("Failed to resolve path: {err}"))?;
+        if !joined_canon.starts_with(&root_canon) {
+            return Err("Resolved path escapes project root".to_string());
+        }
+        return Ok(joined_canon);
+    }
+    if let Some(parent) = joined.parent() {
+        if parent.exists() {
+            let parent_canon = parent
+                .canonicalize()
+                .map_err(|err| format!("Failed to resolve parent path: {err}"))?;
+            if !parent_canon.starts_with(&root_canon) {
+                return Err("Resolved parent escapes project root".to_string());
+            }
+        }
+    }
+    Ok(joined)
 }
 
 fn handle_lint(app: AppHandle, request: tiny_http::Request, project_id: &str, query: &str) {
