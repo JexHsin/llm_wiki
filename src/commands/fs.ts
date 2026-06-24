@@ -142,8 +142,9 @@ export async function listDirectory(path: string): Promise<FileNode[]> {
     const rel = relativeWithinRoot(project.relativePath)
     if (!rel) return nodes
     const node = findNodeByRelativePath(nodes, rel)
-    if (!node) return []
-    return node.is_dir ? (node.children ?? []) : []
+    if (!node) throw new Error(`Directory not found: ${path}`)
+    if (!node.is_dir) throw new Error(`Not a directory: ${path}`)
+    return node.children ?? []
   }
   return invoke<FileNode[]>("list_directory", { path })
 }
@@ -202,8 +203,8 @@ export async function fileExists(path: string): Promise<boolean> {
       return true
     } catch {
       try {
-        const entries = await listDirectory(path)
-        return entries.length >= 0
+        await listDirectory(path)
+        return true
       } catch {
         return false
       }
