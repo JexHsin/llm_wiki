@@ -1,14 +1,18 @@
+use std::fs;
 use std::io::Read;
+use std::path::Path;
 use std::thread;
 
+use serde_json::{json, Value};
+use tauri::{AppHandle, Manager};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 const DEFAULT_PUBLIC_PORT: u16 = 19830;
 const UPSTREAM: &str = "http://127.0.0.1:19828";
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
-pub fn start_web_api_proxy() {
-    thread::spawn(|| {
+pub fn start_web_api_proxy(app: AppHandle) {
+    thread::spawn(move || {
         let port = std::env::var("LLM_WIKI_WEB_PORT")
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
@@ -26,15 +30,23 @@ pub fn start_web_api_proxy() {
         let client = reqwest::Client::new();
         for request in server.incoming_requests() {
             let client = client.clone();
-            thread::spawn(move || handle_request(client, request));
+            let app = app.clone();
+            thread::spawn(move || handle_request(app, client, request));
         }
     });
 }
 
-fn handle_request(client: reqwest::Client, mut request: tiny_http::Request) {
+fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_http::Request) {
     if request.method() == &Method::Options {
         respond_options(request);
         return;
+    }
+
+    if request.method() == &Method::Get {
+        if let Some((project_id, query)) = lint_route(request.url()) {
+            handle_lint(app, request, &project_id, query);
+            return;
+        }
     }
 
     let url = format!("{UPSTREAM}{}", request.url());
@@ -91,6 +103,145 @@ fn handle_request(client: reqwest::Client, mut request: tiny_http::Request) {
     });
 
     respond_json(request, result.0, result.1);
+}
+
+fn lint_route(url: &str) -> Option<(String, &str)> {
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let parts = path
+        .trim_start_matches("/api/v1/")
+        .split('/')
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["projects", project_id, "lint"] => Some((percent_decode(project_id), query)),
+        _ => None,
+    }
+}
+
+fn handle_lint(app: AppHandle, request: tiny_http::Request, project_id: &str, query: &str) {
+    let Some((resolved_id, project_path)) = resolve_project(&app, project_id) else {
+        let msg = format!(r#"{{"ok":false,"error":"Unknown project: {project_id}"}}"#);
+        respond_json(request, 404, msg.into_bytes());
+        return;
+    };
+
+    let limit = query_param(query, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1000)
+        .clamp(1, 1000);
+    let item_type = query_param(query, "type");
+    let path = Path::new(&project_path).join(".llm-wiki/lint.json");
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => "[]".to_string(),
+        Err(err) => {
+            let msg = format!(r#"{{"ok":false,"error":"Failed to read lint state: {err}"}}"#);
+            respond_json(request, 500, msg.into_bytes());
+            return;
+        }
+    };
+    let parsed = match serde_json::from_str::<Value>(&raw) {
+        Ok(Value::Array(items)) => items,
+        Ok(_) => {
+            respond_json(request, 500, br#"{"ok":false,"error":"Invalid lint state JSON: expected an array"}"#.to_vec());
+            return;
+        }
+        Err(err) => {
+            let msg = format!(r#"{{"ok":false,"error":"Invalid lint state JSON: {err}"}}"#);
+            respond_json(request, 500, msg.into_bytes());
+            return;
+        }
+    };
+
+    let items = parsed
+        .into_iter()
+        .filter(|item| {
+            item_type
+                .as_deref()
+                .map(|expected| item.get("type").and_then(Value::as_str) == Some(expected))
+                .unwrap_or(true)
+        })
+        .take(limit)
+        .collect::<Vec<_>>();
+
+    let body = json!({
+        "ok": true,
+        "projectId": resolved_id,
+        "count": items.len(),
+        "lint": items,
+    });
+    respond_json(request, 200, body.to_string().into_bytes());
+}
+
+fn resolve_project(app: &AppHandle, project_id: &str) -> Option<(String, String)> {
+    let state = load_app_state(app)?;
+    if project_id.eq_ignore_ascii_case("current") {
+        if let Some(last) = state.get("lastProject") {
+            if let Some(path) = last.get("path").and_then(Value::as_str) {
+                let id = last
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(project_id)
+                    .to_string();
+                return Some((id, path.to_string()));
+            }
+        }
+    }
+    if let Some(registry) = state.get("projectRegistry").and_then(Value::as_object) {
+        for (id, value) in registry {
+            let path = value.get("path").and_then(Value::as_str)?;
+            if id == project_id || normalize_path(path) == normalize_path(project_id) {
+                return Some((id.clone(), path.to_string()));
+            }
+        }
+    }
+    if let Some(recents) = state.get("recentProjects").and_then(Value::as_array) {
+        for value in recents {
+            let path = value.get("path").and_then(Value::as_str)?;
+            let id = value.get("id").and_then(Value::as_str).unwrap_or(project_id);
+            if id == project_id || normalize_path(path) == normalize_path(project_id) {
+                return Some((id.to_string(), path.to_string()));
+            }
+        }
+    }
+    None
+}
+
+fn load_app_state(app: &AppHandle) -> Option<Value> {
+    let path = app.path().app_data_dir().ok()?.join("app-state.json");
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn query_param(query: &str, key: &str) -> Option<String> {
+    for pair in query.split('&').filter(|s| !s.is_empty()) {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        if percent_decode(k) == key {
+            return Some(percent_decode(v));
+        }
+    }
+    None
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn normalize_path(path: &str) -> String {
+    path.replace('\\', "/").trim_end_matches('/').to_string()
 }
 
 fn respond_options(request: tiny_http::Request) {
