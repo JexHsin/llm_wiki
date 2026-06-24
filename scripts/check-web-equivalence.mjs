@@ -9,6 +9,10 @@ const forbiddenNewFrameworks = [
   'llamaindex',
   'vectordb',
 ];
+const forbiddenStandaloneKernelPaths = [
+  'web-server/rag-kernel.mjs',
+  'web-server/server.mjs',
+];
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
@@ -26,11 +30,20 @@ for (const dep of forbiddenNewFrameworks) {
   }
 }
 
+for (const p of forbiddenStandaloneKernelPaths) {
+  if (fs.existsSync(path.join(root, p))) {
+    throw new Error(`Standalone RAG kernel is not allowed in web-equivalent migration: ${p}`);
+  }
+}
+
 const requiredPaths = [
   'src/lib/http-command-client.ts',
   'src-tauri/src/api_server.rs',
+  'src-tauri/src/web_api_proxy.rs',
   'src/commands/fs.ts',
   'src/App.tsx',
+  'deploy-web.sh',
+  'deploy-web.bat',
 ];
 
 for (const p of requiredPaths) {
