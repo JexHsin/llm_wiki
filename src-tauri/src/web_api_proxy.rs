@@ -370,10 +370,18 @@ fn handle_project_read_base64(app: AppHandle, mut request: tiny_http::Request, p
         respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
         return;
     };
-    let Some(raw_path) = body_string(&mut request, "path") else {
+    let body = match read_json_body(&mut request) {
+        Ok(body) => body,
+        Err((status, body)) => {
+            respond_value(request, status, body);
+            return;
+        }
+    };
+    let Some(raw_path) = body.get("path").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: path" }));
         return;
     };
-    let target = match resolve_project_scoped_path(&project_path, &raw_path) {
+    let target = match resolve_project_scoped_path(&project_path, raw_path) {
         Ok(path) => path,
         Err(err) => {
             respond_value(request, 400, json!({ "ok": false, "error": err }));
@@ -391,17 +399,6 @@ fn handle_project_read_base64(app: AppHandle, mut request: tiny_http::Request, p
         })),
         Err(err) => respond_value(request, 500, json!({ "ok": false, "error": err })),
     }
-}
-
-fn body_string(request: &mut tiny_http::Request, field: &str) -> Option<String> {
-    let body = match read_json_body(request) {
-        Ok(body) => body,
-        Err((status, body)) => {
-            respond_value(request.clone(), status, body);
-            return None;
-        }
-    };
-    body.get(field).and_then(Value::as_str).map(ToOwned::to_owned)
 }
 
 fn handle_project_metadata(app: AppHandle, mut request: tiny_http::Request, project_id: &str) {
