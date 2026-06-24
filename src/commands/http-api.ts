@@ -55,6 +55,13 @@ export interface ApiReviewsResponse {
   reviews: unknown[]
 }
 
+export interface ApiLintResponse {
+  ok: boolean
+  projectId: string
+  count: number
+  lint: unknown[]
+}
+
 export interface ApiSearchResponse {
   ok: boolean
   projectId: string
@@ -114,6 +121,17 @@ export function apiProjectReviews(
   if (params.type) query.set("type", params.type)
   if (typeof params.limit === "number") query.set("limit", String(params.limit))
   return httpGet<ApiReviewsResponse>(projectApiPath(projectId, `/reviews${query.toString() ? `?${query}` : ""}`), options)
+}
+
+export function apiProjectLint(
+  projectId: string,
+  params: { type?: string; limit?: number } = {},
+  options?: HttpCommandOptions,
+): Promise<ApiLintResponse> {
+  const query = new URLSearchParams()
+  if (params.type) query.set("type", params.type)
+  if (typeof params.limit === "number") query.set("limit", String(params.limit))
+  return httpGet<ApiLintResponse>(projectApiPath(projectId, `/lint${query.toString() ? `?${query}` : ""}`), options)
 }
 
 export function apiProjectSearch(
