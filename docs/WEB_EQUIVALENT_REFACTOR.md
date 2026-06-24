@@ -49,6 +49,10 @@ When `VITE_LLM_WIKI_WEB_MODE=true`, the following paths now use HTTP instead of 
   - `listDirectory` maps API file trees back to the requested subtree, matching desktop `list_directory(path)` semantics.
   - `openProject`
   - `apiServerStatus`
+- `src/lib/embedding.ts`
+  - The original chunking, embedding prompt enrichment, retry/auto-halving, rebuild semantics, page aggregation, and matched-chunk scoring are preserved.
+  - Web mode routes embedding provider HTTP requests through the authenticated backend proxy so CORS-unfriendly embedding endpoints behave like the original Tauri HTTP plugin path.
+  - Web mode routes LanceDB vector operations through HTTP while still delegating to the original Rust `commands::vectorstore::*` functions: chunk upsert/search/delete/count/clear/optimize and legacy v1 count/drop.
 - `src/lib/llm-client.ts`
   - `streamChat` still uses the original `llm-providers.ts` provider URL/body/header/parse pipeline. In Web mode, the provider HTTP request is sent through `/chat` as an authenticated proxy instead of being reimplemented in Rust.
 - `src/lib/search.ts`
@@ -66,7 +70,7 @@ Desktop mode remains unchanged unless `VITE_LLM_WIKI_WEB_MODE=true` is set.
 
 ### Web-mode safeguards
 
-Project-scoped read/write/copy/metadata/preprocess endpoints are implemented in the Web proxy. Compatibility endpoints follow the same API enabled/auth rules as the original local API server. Project file paths are resolved against the current project, reject traversal/prefix/root escapes, and canonicalize existing paths/parents to reduce symlink escape risk. Unsupported desktop shell operations still fail fast in Web mode instead of falling through to Tauri.
+Project-scoped read/write/copy/metadata/preprocess/vector endpoints are implemented in the Web proxy. Compatibility endpoints follow the same API enabled/auth rules as the original local API server. Project file paths are resolved against the current project, reject traversal/prefix/root escapes, and canonicalize existing paths plus the nearest existing ancestor for new paths to reduce symlink escape risk. Unsupported desktop shell operations still fail fast in Web mode instead of falling through to Tauri.
 
 ### Phase 2: Backend serviceization
 
@@ -125,6 +129,14 @@ The bridge also exposes compatibility endpoints that the original local API did 
 - `POST /api/v1/projects/{projectId}/directories/create`
 - `POST /api/v1/projects/{projectId}/directories/copy`
 - `POST /api/v1/projects/{projectId}/wiki/related-pages`
+- `POST /api/v1/projects/{projectId}/vectors/chunks/upsert`
+- `POST /api/v1/projects/{projectId}/vectors/chunks/search`
+- `POST /api/v1/projects/{projectId}/vectors/pages/delete`
+- `POST /api/v1/projects/{projectId}/vectors/chunks/count`
+- `POST /api/v1/projects/{projectId}/vectors/chunks/clear`
+- `POST /api/v1/projects/{projectId}/vectors/chunks/optimize`
+- `POST /api/v1/projects/{projectId}/vectors/legacy/count`
+- `POST /api/v1/projects/{projectId}/vectors/legacy/drop`
 - `POST /api/v1/projects/{projectId}/chat`
 
 This is a migration bridge, not a new knowledge-base implementation. The final serviceized version should move these endpoints into the original API server once full command-equivalence tests are in place.
