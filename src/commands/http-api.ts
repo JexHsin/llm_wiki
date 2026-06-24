@@ -1,4 +1,4 @@
-import { healthApiPath, httpGet, httpPost, projectApiPath, type HttpCommandOptions } from "@/lib/http-command-client"
+import { healthApiPath, httpGet, httpPost, httpPostRaw, projectApiPath, type HttpCommandOptions } from "@/lib/http-command-client"
 
 export interface ApiHealth {
   ok: boolean
@@ -85,6 +85,12 @@ export interface ApiGraphResponse {
 export interface ApiRescanResponse {
   ok: boolean
   projectId: string
+}
+
+export interface ApiProviderChatRequest {
+  url: string
+  headers: Record<string, string>
+  body: unknown
 }
 
 export function apiHealth(options?: HttpCommandOptions): Promise<ApiHealth> {
@@ -190,6 +196,6 @@ export function apiProjectRescan(projectId: string, options?: HttpCommandOptions
   return httpPost<ApiRescanResponse>(projectApiPath(projectId, "/sources/rescan"), {}, options)
 }
 
-export function apiProjectChat(projectId: string, body: unknown, options?: HttpCommandOptions): Promise<unknown> {
-  return httpPost(projectApiPath(projectId, "/chat"), body, options)
+export function apiProjectChat(projectId: string, body: ApiProviderChatRequest, options?: HttpCommandOptions): Promise<Response> {
+  return httpPostRaw(projectApiPath(projectId, "/chat"), body, options)
 }
