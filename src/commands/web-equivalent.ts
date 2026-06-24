@@ -61,7 +61,7 @@ export async function searchWebProject(
   maxResults?: number,
   options?: HttpCommandOptions,
 ): Promise<unknown[]> {
-  const res = await apiProjectSearch(projectId, { query, maxResults }, options)
+  const res = await apiProjectSearch(projectId, { query, topK: maxResults }, options)
   return res.results
 }
 
