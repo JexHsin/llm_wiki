@@ -36,8 +36,11 @@ const STOP_WORDS = new Set([
   "this", "that", "these", "those",
 ])
 
-export function tokenizeQuery(query: string): string[] {
-  const rawTokens = query
+export function tokenizeQuery(query: string[]): string[]
+export function tokenizeQuery(query: string): string[]
+export function tokenizeQuery(query: string | string[]): string[] {
+  const queryText = Array.isArray(query) ? query.join(" ") : query
+  const rawTokens = queryText
     .toLowerCase()
     .split(/[\s,，。！？、；：""''（）()\-_/\\·~～…]+/)
     .filter((t) => t.length > 1)
@@ -76,7 +79,12 @@ export async function searchWiki(
   const pp = normalizePath(projectPath)
 
   if (isWebMode()) {
-    const response = await apiProjectSearch("current", { query, maxResults: 20 })
+    const response = await apiProjectSearch("current", {
+      query,
+      topK: 20,
+      includeContent: false,
+      queryEmbedding: null,
+    })
     return (response.results as SearchResult[]).map((result) => ({
       ...result,
       images: result.images ?? [],
