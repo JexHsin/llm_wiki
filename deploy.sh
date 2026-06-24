@@ -1,6 +1,4 @@
-#!/bin/bash
-
+#!/usr/bin/env bash
 set -e
-
-cargo build --release
-./target/release/llm_wiki
+npm install
+node web-server/server.mjs
