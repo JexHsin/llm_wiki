@@ -1,4 +1,3 @@
 @echo off
-
-cargo build --release
-.	arget\release\llm_wiki.exe
+npm install
+node web-server\server.mjs
