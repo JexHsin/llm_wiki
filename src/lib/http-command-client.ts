@@ -39,6 +39,17 @@ export async function httpPost<T>(path: string, body?: unknown, options?: HttpCo
   return parseResponse<T>(res)
 }
 
+export async function httpPostRaw(path: string, body?: unknown, options?: HttpCommandOptions): Promise<Response> {
+  return fetch(`${apiBase(options)}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(options),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+}
+
 async function parseResponse<T>(res: Response): Promise<T> {
   const text = await res.text()
   const data = text ? JSON.parse(text) : null
