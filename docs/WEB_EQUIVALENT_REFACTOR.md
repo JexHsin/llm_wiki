@@ -25,13 +25,13 @@ The correct migration is not to build a new RAG engine. The original project alr
 - Use `src/commands/http-api.ts` for endpoint-level wrappers.
 - Use `src/commands/web-equivalent.ts`, `src/commands/web-fs.ts`, `src/commands/web-projects.ts`, and `src/commands/web-graph.ts` as adapter façades that convert API payloads back to existing frontend domain types.
 
-### Completed read-only substitutions
+### Completed substitutions
 
 When `VITE_LLM_WIKI_WEB_MODE=true`, the following paths now use HTTP instead of direct Tauri invoke calls:
 
 - `src/commands/fs.ts`
-  - `readFile`
-  - `listDirectory`
+  - `readFile` uses project-scoped `/files/read`, so `.llm-wiki/*` state files keep the same behavior as desktop mode.
+  - `listDirectory` maps API file trees back to the requested subtree, matching desktop `list_directory(path)` semantics.
   - `openProject`
   - `apiServerStatus`
   - `writeFile`
@@ -40,14 +40,13 @@ When `VITE_LLM_WIKI_WEB_MODE=true`, the following paths now use HTTP instead of 
   - `createDirectory`
   - `fileExists`
 - `src/lib/llm-client.ts`
-  - `streamChat` delegates to `/chat` in Web mode, while desktop mode keeps the original streaming provider pipeline.
+  - `streamChat` still uses the original `llm-providers.ts` provider URL/body/header/parse pipeline. In Web mode, the provider HTTP request is sent through `/chat` as an authenticated proxy instead of being reimplemented in Rust.
 - `src/lib/search.ts`
-  - `searchWiki` uses the existing `/search` API instead of direct `invoke("search_project")`.
+  - `searchWiki` uses the existing `/search` API with the original `topK: 20`, `includeContent: false`, and `queryEmbedding: null` contract.
 - `src/lib/wiki-graph.ts`
-  - `buildWikiGraph` delegates to `src/commands/web-graph.ts`, which reads the existing `/graph` API via `getWebProjectGraph()` / `apiProjectGraph()`.
+  - `buildWikiGraph` delegates to `src/commands/web-graph.ts`, which reads the existing `/graph` API via `getWebProjectGraph()` / `apiProjectGraph()` and normalizes node paths back to absolute project paths.
 - `src/lib/persist.ts`
-  - `loadReviewItems` uses the existing `/reviews` API instead of reading `.llm-wiki/review.json` directly.
-  - `loadLintItems` uses the Web proxy `/lint` API instead of reading `.llm-wiki/lint.json` directly.
+  - Review, Lint, and Chat history persistence continue to read/write the same `.llm-wiki/*.json` files through the Web filesystem façade. No Review/Lint data format or limit/sanitization is introduced in the frontend persistence path.
 - `src/components/project/welcome-screen.tsx`
   - recent/current project list uses the existing `/projects` API through `src/commands/web-projects.ts`.
 - `src/commands/web-projects.ts`
@@ -55,9 +54,9 @@ When `VITE_LLM_WIKI_WEB_MODE=true`, the following paths now use HTTP instead of 
 
 Desktop mode remains unchanged unless `VITE_LLM_WIKI_WEB_MODE=true` is set.
 
-### Web-mode write safeguards
+### Web-mode write and read safeguards
 
-Project-scoped write endpoints are implemented in the Web proxy for write/delete/create-directory operations. Paths are resolved against the current project and rejected if they escape the project root. Unsupported binary/project-management operations still fail fast in Web mode instead of falling through to Tauri.
+Project-scoped read/write endpoints are implemented in the Web proxy for text read, write, atomic write, delete, and create-directory operations. Compatibility endpoints now follow the same API enabled/auth rules as the original local API server. Paths are resolved against the current project, reject traversal/prefix/root escapes, and canonicalize existing paths/parents to prevent symlink escape. Unsupported binary/project-management operations still fail fast in Web mode instead of falling through to Tauri.
 
 ### Phase 2: Backend serviceization
 
@@ -103,6 +102,7 @@ The original Rust API remains the source of truth on `127.0.0.1:19828`. To avoid
 The bridge also exposes compatibility endpoints that the original local API did not yet include:
 
 - `GET /api/v1/projects/{projectId}/lint`
+- `POST /api/v1/projects/{projectId}/files/read`
 - `POST /api/v1/projects/{projectId}/files/write`
 - `POST /api/v1/projects/{projectId}/files/write-atomic`
 - `POST /api/v1/projects/{projectId}/files/delete`
