@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export LLM_WIKI_HTTP_HOST="${LLM_WIKI_HTTP_HOST:-0.0.0.0}"
-export LLM_WIKI_HTTP_PORT="${LLM_WIKI_HTTP_PORT:-19828}"
+export LLM_WIKI_WEB_PORT="${LLM_WIKI_WEB_PORT:-19830}"
 
 npm ci
 npm run mcp:build
