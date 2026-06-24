@@ -1,8 +1,10 @@
 import { writeFile, readFile, createDirectory } from "@/commands/fs"
+import { apiProjectReviews } from "@/commands/http-api"
 import type { ReviewItem } from "@/stores/review-store"
 import type { LintItem } from "@/stores/lint-store"
 import type { DisplayMessage, Conversation } from "@/stores/chat-store"
 import { normalizePath } from "@/lib/path-utils"
+import { isWebMode } from "@/lib/web-mode"
 
 async function ensureDir(projectPath: string): Promise<void> {
   await createDirectory(`${projectPath}/.llm-wiki`).catch(() => {})
@@ -16,6 +18,14 @@ export async function saveReviewItems(projectPath: string, items: ReviewItem[]):
 }
 
 export async function loadReviewItems(projectPath: string): Promise<ReviewItem[]> {
+  if (isWebMode()) {
+    try {
+      const res = await apiProjectReviews("current", { status: "all" })
+      return res.reviews as ReviewItem[]
+    } catch {
+      return []
+    }
+  }
   const pp = normalizePath(projectPath)
   try {
     const content = await readFile(`${pp}/.llm-wiki/review.json`)
