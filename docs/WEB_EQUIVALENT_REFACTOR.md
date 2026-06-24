@@ -23,7 +23,7 @@ The correct migration is not to build a new RAG engine. The original project alr
 - Replace direct Tauri `invoke(...)` calls with typed HTTP wrappers.
 - Keep request/response payloads identical to the old command payloads where possible.
 - Use `src/commands/http-api.ts` for endpoint-level wrappers.
-- Use `src/commands/web-equivalent.ts`, `src/commands/web-fs.ts`, and `src/commands/web-projects.ts` as adapter façades that convert API payloads back to existing frontend domain types.
+- Use `src/commands/web-equivalent.ts`, `src/commands/web-fs.ts`, `src/commands/web-projects.ts`, and `src/commands/web-graph.ts` as adapter façades that convert API payloads back to existing frontend domain types.
 
 ### Completed read-only substitutions
 
@@ -34,8 +34,11 @@ When `VITE_LLM_WIKI_WEB_MODE=true`, the following read-only paths now use HTTP i
   - `listDirectory`
   - `openProject`
   - `apiServerStatus`
+- `src/lib/wiki-graph.ts`
+  - `buildWikiGraph` delegates to `src/commands/web-graph.ts`, which reads the existing `/graph` API via `getWebProjectGraph()` / `apiProjectGraph()`.
 - `src/lib/persist.ts`
   - `loadReviewItems` uses the existing `/reviews` API instead of reading `.llm-wiki/review.json` directly.
+  - `loadLintItems` uses the Web proxy `/lint` API instead of reading `.llm-wiki/lint.json` directly.
 - `src/components/project/welcome-screen.tsx`
   - recent/current project list uses the existing `/projects` API through `src/commands/web-projects.ts`.
 - `src/commands/web-projects.ts`
@@ -84,6 +87,8 @@ Required test groups:
 
 The original Rust API remains the source of truth on `127.0.0.1:19828`. To avoid rewriting or duplicating business logic, this branch adds `src-tauri/src/web_api_proxy.rs`, which exposes a public bridge on `0.0.0.0:${LLM_WIKI_WEB_PORT:-19830}` and forwards requests to the original local API.
 
+The bridge also exposes `GET /api/v1/projects/{projectId}/lint` as a read-only compatibility endpoint for `.llm-wiki/lint.json`, because the original local API did not yet include a Lint read endpoint.
+
 This is a migration bridge, not a new knowledge-base implementation. The final serviceized version should move the original API bind address itself to `0.0.0.0` after the full command-equivalence test suite is in place.
 
 ## Environment
@@ -108,6 +113,7 @@ This branch currently contains the safe foundation only:
 - `src/commands/web-equivalent.ts`
 - `src/commands/web-fs.ts`
 - `src/commands/web-projects.ts`
+- `src/commands/web-graph.ts`
 - `src-tauri/src/web_api_proxy.rs`
 - `scripts/check-web-equivalence.mjs`
 - `deploy-web.sh`
