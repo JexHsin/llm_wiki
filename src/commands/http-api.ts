@@ -135,6 +135,34 @@ export interface ApiProviderChatRequest {
   body: unknown
 }
 
+export interface ApiChunkUpsertInput {
+  chunk_index: number
+  chunk_text: string
+  heading_path: string
+  embedding: number[]
+}
+
+export interface ApiChunkSearchResult {
+  chunk_id: string
+  page_id: string
+  chunk_index: number
+  chunk_text: string
+  heading_path: string
+  score: number
+}
+
+export interface ApiVectorSearchChunksResponse {
+  ok: boolean
+  projectId: string
+  results: ApiChunkSearchResult[]
+}
+
+export interface ApiVectorCountResponse {
+  ok: boolean
+  projectId: string
+  count: number
+}
+
 export function apiHealth(options?: HttpCommandOptions): Promise<ApiHealth> {
   return httpGet<ApiHealth>(healthApiPath(), options)
 }
@@ -273,6 +301,52 @@ export function apiProjectRelatedWikiPages(
   options?: HttpCommandOptions,
 ): Promise<ApiRelatedWikiPagesResponse> {
   return httpPost<ApiRelatedWikiPagesResponse>(projectApiPath(projectId, "/wiki/related-pages"), { sourceName }, options)
+}
+
+export function apiProjectVectorUpsertChunks(
+  projectId: string,
+  pageId: string,
+  chunks: ApiChunkUpsertInput[],
+  options?: HttpCommandOptions,
+): Promise<{ ok: boolean; projectId: string }> {
+  return httpPost<{ ok: boolean; projectId: string }>(projectApiPath(projectId, "/vectors/chunks/upsert"), { pageId, chunks }, options)
+}
+
+export function apiProjectVectorSearchChunks(
+  projectId: string,
+  queryEmbedding: number[],
+  topK: number,
+  options?: HttpCommandOptions,
+): Promise<ApiVectorSearchChunksResponse> {
+  return httpPost<ApiVectorSearchChunksResponse>(projectApiPath(projectId, "/vectors/chunks/search"), { queryEmbedding, topK }, options)
+}
+
+export function apiProjectVectorDeletePage(
+  projectId: string,
+  pageId: string,
+  options?: HttpCommandOptions,
+): Promise<{ ok: boolean; projectId: string }> {
+  return httpPost<{ ok: boolean; projectId: string }>(projectApiPath(projectId, "/vectors/pages/delete"), { pageId }, options)
+}
+
+export function apiProjectVectorCountChunks(projectId: string, options?: HttpCommandOptions): Promise<ApiVectorCountResponse> {
+  return httpPost<ApiVectorCountResponse>(projectApiPath(projectId, "/vectors/chunks/count"), {}, options)
+}
+
+export function apiProjectVectorClearChunks(projectId: string, options?: HttpCommandOptions): Promise<{ ok: boolean; projectId: string }> {
+  return httpPost<{ ok: boolean; projectId: string }>(projectApiPath(projectId, "/vectors/chunks/clear"), {}, options)
+}
+
+export function apiProjectVectorOptimizeChunks(projectId: string, options?: HttpCommandOptions): Promise<{ ok: boolean; projectId: string }> {
+  return httpPost<{ ok: boolean; projectId: string }>(projectApiPath(projectId, "/vectors/chunks/optimize"), {}, options)
+}
+
+export function apiProjectVectorLegacyRowCount(projectId: string, options?: HttpCommandOptions): Promise<ApiVectorCountResponse> {
+  return httpPost<ApiVectorCountResponse>(projectApiPath(projectId, "/vectors/legacy/count"), {}, options)
+}
+
+export function apiProjectVectorDropLegacy(projectId: string, options?: HttpCommandOptions): Promise<{ ok: boolean; projectId: string }> {
+  return httpPost<{ ok: boolean; projectId: string }>(projectApiPath(projectId, "/vectors/legacy/drop"), {}, options)
 }
 
 export function apiProjectReviews(
