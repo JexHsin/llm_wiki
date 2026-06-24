@@ -6,8 +6,8 @@ import {
   apiHealth,
   apiProjectCreateDirectory,
   apiProjectDeleteFile,
-  apiProjectFileContent,
   apiProjectFiles,
+  apiProjectReadFile,
   apiProjectWriteFile,
   apiProjectWriteFileAtomic,
   apiProjects,
@@ -95,8 +95,7 @@ export async function readFile(
 ): Promise<string> {
   if (isWebMode()) {
     const project = await resolveWebProjectForPath(path)
-    const relativePath = project.relativePath || path
-    const res = await apiProjectFileContent(project.id, relativePath)
+    const res = await apiProjectReadFile(project.id, path)
     return res.content
   }
   return invoke<string>("read_file", {
