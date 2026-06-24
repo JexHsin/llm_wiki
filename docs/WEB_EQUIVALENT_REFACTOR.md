@@ -22,6 +22,8 @@ The correct migration is not to build a new RAG engine. The original project alr
 - Add a single frontend HTTP client: `src/lib/http-command-client.ts`.
 - Replace direct Tauri `invoke(...)` calls with typed HTTP wrappers.
 - Keep request/response payloads identical to the old command payloads where possible.
+- Use `src/commands/http-api.ts` for endpoint-level wrappers.
+- Use `src/commands/web-equivalent.ts` and `src/commands/web-fs.ts` as adapter façades that convert API payloads back to existing frontend domain types.
 
 ### Phase 2: Backend serviceization
 
@@ -66,11 +68,25 @@ The original Rust API remains the source of truth on `127.0.0.1:19828`. To avoid
 
 This is a migration bridge, not a new knowledge-base implementation. The final serviceized version should move the original API bind address itself to `0.0.0.0` after the full command-equivalence test suite is in place.
 
+## Environment
+
+Copy `.env.web.example` and set `VITE_LLM_WIKI_API_BASE` to the public proxy URL when accessing the Web UI from another node.
+
+Example:
+
+```text
+VITE_LLM_WIKI_API_BASE=http://192.168.1.10:19830
+LLM_WIKI_WEB_PORT=19830
+```
+
 ## Current branch status
 
 This branch currently contains the safe foundation only:
 
 - `src/lib/http-command-client.ts`
+- `src/commands/http-api.ts`
+- `src/commands/web-equivalent.ts`
+- `src/commands/web-fs.ts`
 - `src-tauri/src/web_api_proxy.rs`
 - `scripts/check-web-equivalence.mjs`
 - `deploy-web.sh`
