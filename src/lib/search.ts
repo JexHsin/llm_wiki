@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
+import { apiProjectSearch } from "@/commands/http-api"
 import { normalizePath } from "@/lib/path-utils"
+import { isWebMode } from "@/lib/web-mode"
 import { useWikiStore } from "@/stores/wiki-store"
 
 export interface ImageRef {
@@ -58,12 +60,35 @@ export function tokenizeQuery(query: string): string[] {
   return [...new Set(tokens)]
 }
 
+function normalizeSearchResultPath(projectPath: string, path: string): string {
+  const pp = normalizePath(projectPath)
+  const normalized = normalizePath(path).replace(/^\/+/, "")
+  return normalized.startsWith(`${pp}/`) || normalized === pp
+    ? normalized
+    : `${pp}/${normalized}`
+}
+
 export async function searchWiki(
   projectPath: string,
   query: string,
 ): Promise<SearchResult[]> {
   if (!query.trim()) return []
   const pp = normalizePath(projectPath)
+
+  if (isWebMode()) {
+    const response = await apiProjectSearch("current", {
+      query,
+      topK: 20,
+      includeContent: false,
+      queryEmbedding: null,
+    })
+    return (response.results as SearchResult[]).map((result) => ({
+      ...result,
+      images: result.images ?? [],
+      path: normalizeSearchResultPath(pp, result.path),
+    }))
+  }
+
   const embCfg = useWikiStore.getState().embeddingConfig
 
   const response = await invoke<BackendSearchResponse>("search_project", {
@@ -77,6 +102,6 @@ export async function searchWiki(
 
   return response.results.map((result) => ({
     ...result,
-    path: `${pp}/${normalizePath(result.path).replace(/^\/+/, "")}`,
+    path: normalizeSearchResultPath(pp, result.path),
   }))
 }

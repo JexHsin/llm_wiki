@@ -2,6 +2,8 @@ import { useEffect, useState } from "react"
 import { FolderOpen, Plus, Clock, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { getRecentProjects, removeFromRecentProjects } from "@/lib/project-store"
+import { isWebMode } from "@/lib/web-mode"
+import { getWebRecentProjects } from "@/commands/web-projects"
 import type { WikiProject } from "@/types/wiki"
 import { useTranslation } from "react-i18next"
 
@@ -9,6 +11,10 @@ interface WelcomeScreenProps {
   onCreateProject: () => void
   onOpenProject: () => void
   onSelectProject: (project: WikiProject) => void
+}
+
+async function loadProjectList(): Promise<WikiProject[]> {
+  return isWebMode() ? getWebRecentProjects() : getRecentProjects()
 }
 
 export function WelcomeScreen({
@@ -20,11 +26,15 @@ export function WelcomeScreen({
   const [recentProjects, setRecentProjects] = useState<WikiProject[]>([])
 
   useEffect(() => {
-    getRecentProjects().then(setRecentProjects).catch(() => {})
+    loadProjectList().then(setRecentProjects).catch(() => {})
   }, [])
 
   async function handleRemoveRecent(e: React.MouseEvent, path: string) {
     e.stopPropagation()
+    if (isWebMode()) {
+      setRecentProjects((projects) => projects.filter((project) => project.path !== path))
+      return
+    }
     await removeFromRecentProjects(path)
     const updated = await getRecentProjects()
     setRecentProjects(updated)

@@ -1,24 +1,5 @@
-/**
- * Embedding pipeline — standard RAG flow.
- *
- *   1. chunkMarkdown(content)        (src/lib/text-chunker.ts)
- *   2. for each chunk:
- *        fetchEmbedding(title + heading_path + chunk_text)
- *        with auto-halve retry on "input too long" errors
- *   3. vector_upsert_chunks(page_id, [{chunk_index, chunk_text,
- *      heading_path, embedding}, …])
- *
- * Search:
- *   1. fetchEmbedding(query)
- *   2. vector_search_chunks(query_emb, topK × 3)
- *   3. group by page_id, max-pool primary score + weighted tail sum
- *   4. return top-K pages, outer API-compatible with the old per-page
- *      `{id, score}[]` shape; matched chunks available on the
- *      optional `matchedChunks` field for future UI surfacing.
- *
- * HTTP goes through the Tauri plugin (`src/lib/tauri-fetch.ts`) so
- * CORS-unfriendly endpoints work the same as the LLM path.
- */
+// NOTE: This file keeps the original embedding pipeline intact. Web mode only
+// swaps the external command boundaries from Tauri invoke/plugin fetch to HTTP API calls.
 
 import { readFile, listDirectory } from "@/commands/fs"
 import { invoke } from "@tauri-apps/api/core"
@@ -28,6 +9,19 @@ import { normalizePath } from "@/lib/path-utils"
 import { getHttpFetch, isFetchNetworkError } from "@/lib/tauri-fetch"
 import { chunkMarkdown, type Chunk } from "@/lib/text-chunker"
 import { isLocalOrPrivateHttpEndpoint, localLlmOriginHeader } from "@/lib/llm-providers"
+import { isWebMode } from "@/lib/web-mode"
+import {
+  apiProjectChat,
+  apiProjectVectorClearChunks,
+  apiProjectVectorCountChunks,
+  apiProjectVectorDeletePage,
+  apiProjectVectorDropLegacy,
+  apiProjectVectorLegacyRowCount,
+  apiProjectVectorOptimizeChunks,
+  apiProjectVectorSearchChunks,
+  apiProjectVectorUpsertChunks,
+  type ApiChunkUpsertInput,
+} from "@/commands/http-api"
 
 const RESERVED_EMBEDDING_HEADER_NAMES = new Set([
   "authorization",
@@ -50,14 +44,6 @@ function isSafeExtraHeader(name: string, value: string): boolean {
   )
 }
 
-// ── Error surfacing ──────────────────────────────────────────────────────
-
-/**
- * Most recent embedding failure description, so Settings → Embedding
- * can show the user WHY vector search fell back to BM25 instead of
- * silently dropping to keyword match. Cleared on any successful
- * embed.
- */
 let lastEmbeddingError: string | null = null
 const INCREMENTAL_OPTIMIZE_PAGE_THRESHOLD = 20
 const incrementalOptimizeCounts = new Map<string, number>()
@@ -70,16 +56,6 @@ export function resetEmbeddingOptimizeAccountingForTests(): void {
   incrementalOptimizeCounts.clear()
 }
 
-// ── fetchEmbedding with auto-halve retry ────────────────────────────────
-
-/**
- * Heuristic: does this error response look like an "input too long /
- * exceeds model context / payload too large" rejection? True for all
- * the phrasings we've seen from OpenAI, LM Studio, llama.cpp,
- * Ollama, and Azure. Safer to over-match than under-match — a false
- * positive just means a retry at half size, which will still succeed
- * on a real auth/model-id error (it won't) or just log the same error.
- */
 export function looksLikeOversizeError(httpStatus: number, body: string): boolean {
   if (httpStatus === 413) return true
   const lower = body.toLowerCase()
@@ -95,16 +71,22 @@ export function looksLikeOversizeError(httpStatus: number, body: string): boolea
   )
 }
 
-/**
- * POST one embedding request; on an oversize rejection, halve the text
- * and retry up to `maxRetries` times. Returns null on definitive
- * failure (auth, network, dim mismatch, retries exhausted) with a
- * human-readable reason left in `lastEmbeddingError`.
- *
- * The returned vector represents the (possibly truncated) text that
- * actually got through. Chunker config should be tuned to minimise
- * truncation — this is a safety net, not the main line of defence.
- */
+async function postEmbeddingRequest(
+  endpoint: string,
+  headers: Record<string, string>,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  if (isWebMode()) {
+    return apiProjectChat("current", { url: endpoint, headers, body })
+  }
+  const httpFetch = await getHttpFetch()
+  return httpFetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  })
+}
+
 export async function fetchEmbedding(
   text: string,
   cfg: EmbeddingConfig,
@@ -142,18 +124,12 @@ export async function fetchEmbedding(
   while (attempts <= maxRetries) {
     attempts++
     try {
-      const httpFetch = await getHttpFetch()
-      const resp = await httpFetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(
-          isGoogleNative
-            ? googleEmbeddingBody(cfg.model, current, cfg.outputDimensionality)
-            : isDoubaoMultimodal
-              ? doubaoMultimodalEmbeddingBody(cfg.model, current)
-              : { model: cfg.model, input: current },
-        ),
-      })
+      const requestBody = isGoogleNative
+        ? googleEmbeddingBody(cfg.model, current, cfg.outputDimensionality)
+        : isDoubaoMultimodal
+          ? doubaoMultimodalEmbeddingBody(cfg.model, current)
+          : { model: cfg.model, input: current }
+      const resp = await postEmbeddingRequest(endpoint, headers, requestBody)
 
       if (resp.ok) {
         const data = await resp.json()
@@ -176,17 +152,14 @@ export async function fetchEmbedding(
         return null
       }
 
-      // Non-OK: try to read the body for an oversize hint.
       let bodyText = ""
       try {
         bodyText = await resp.text()
       } catch {
-        // ignore — some servers return empty bodies on error
+        // ignore
       }
 
       if (looksLikeOversizeError(resp.status, bodyText)) {
-        // Can we still halve-and-retry? Need room on both axes:
-        // text not yet at the 64-char floor, and retry budget left.
         if (current.length > 64 && attempts <= maxRetries) {
           const prev = current.length
           current = current.slice(0, Math.floor(current.length / 2))
@@ -195,15 +168,11 @@ export async function fetchEmbedding(
           )
           continue
         }
-        // Out of retries on a SERVER-oversize error — give the user a
-        // message that names the smallest size that still failed so
-        // they can tune Settings → Embedding accordingly.
         lastEmbeddingError = `Endpoint rejected input even at ${current.length} chars — server context smaller than expected. Lower Settings → Embedding → Max Chunk Chars (${bodyText.slice(0, 160)}).`
         console.warn(`[Embedding] ${lastEmbeddingError}`)
         return null
       }
 
-      // Non-oversize definitive failure (auth, rate limit, server down, …).
       lastEmbeddingError = `API ${resp.status} ${resp.statusText}${bodyText ? ` — ${bodyText.slice(0, 200)}` : ""} at ${endpoint}`
       console.warn(`[Embedding] ${lastEmbeddingError}`)
       return null
@@ -218,8 +187,6 @@ export async function fetchEmbedding(
     }
   }
 
-  // Exhausted retries (only reachable if every halving round triggered
-  // the retry branch and then the loop condition ended).
   lastEmbeddingError = `Embedding endpoint rejected every size down to ${current.length} chars — the server's context is smaller than ${current.length * 2}. Lower Settings → Embedding → Max Chunk Chars.`
   console.warn(`[Embedding] ${lastEmbeddingError}`)
   return null
@@ -363,8 +330,6 @@ function doubaoMultimodalEmbeddingBody(model: string, text: string): Record<stri
   }
 }
 
-// ── LanceDB v2 operations (via Rust Tauri commands) ──────────────────────
-
 interface ChunkUpsertInput {
   chunkIndex: number
   chunkText: string
@@ -372,20 +337,29 @@ interface ChunkUpsertInput {
   embedding: number[]
 }
 
+function apiProjectId(projectPath: string): string {
+  return normalizePath(projectPath)
+}
+
 async function vectorUpsertChunks(
   projectPath: string,
   pageId: string,
   chunks: ChunkUpsertInput[],
 ): Promise<void> {
+  const payload: ApiChunkUpsertInput[] = chunks.map((c) => ({
+    chunk_index: c.chunkIndex,
+    chunk_text: c.chunkText,
+    heading_path: c.headingPath,
+    embedding: c.embedding.map((v) => Math.fround(v)),
+  }))
+  if (isWebMode()) {
+    await apiProjectVectorUpsertChunks(apiProjectId(projectPath), pageId, payload)
+    return
+  }
   await invoke("vector_upsert_chunks", {
     projectPath: normalizePath(projectPath),
     pageId,
-    chunks: chunks.map((c) => ({
-      chunk_index: c.chunkIndex,
-      chunk_text: c.chunkText,
-      heading_path: c.headingPath,
-      embedding: c.embedding.map((v) => Math.fround(v)),
-    })),
+    chunks: payload,
   })
 }
 
@@ -403,14 +377,23 @@ async function vectorSearchChunks(
   queryEmbedding: number[],
   topK: number,
 ): Promise<ChunkSearchResult[]> {
+  const query = queryEmbedding.map((v) => Math.fround(v))
+  if (isWebMode()) {
+    const res = await apiProjectVectorSearchChunks(apiProjectId(projectPath), query, topK)
+    return res.results
+  }
   return await invoke("vector_search_chunks", {
     projectPath: normalizePath(projectPath),
-    queryEmbedding: queryEmbedding.map((v) => Math.fround(v)),
+    queryEmbedding: query,
     topK,
   })
 }
 
 async function vectorDeletePage(projectPath: string, pageId: string): Promise<void> {
+  if (isWebMode()) {
+    await apiProjectVectorDeletePage(apiProjectId(projectPath), pageId)
+    return
+  }
   await invoke("vector_delete_page", {
     projectPath: normalizePath(projectPath),
     pageId,
@@ -418,18 +401,30 @@ async function vectorDeletePage(projectPath: string, pageId: string): Promise<vo
 }
 
 async function vectorCountChunks(projectPath: string): Promise<number> {
+  if (isWebMode()) {
+    const res = await apiProjectVectorCountChunks(apiProjectId(projectPath))
+    return res.count
+  }
   return await invoke("vector_count_chunks", {
     projectPath: normalizePath(projectPath),
   })
 }
 
 async function vectorClearChunks(projectPath: string): Promise<void> {
+  if (isWebMode()) {
+    await apiProjectVectorClearChunks(apiProjectId(projectPath))
+    return
+  }
   await invoke("vector_clear_chunks", {
     projectPath: normalizePath(projectPath),
   })
 }
 
 async function vectorOptimizeChunks(projectPath: string): Promise<void> {
+  if (isWebMode()) {
+    await apiProjectVectorOptimizeChunks(apiProjectId(projectPath))
+    return
+  }
   await invoke("vector_optimize_chunks", {
     projectPath: normalizePath(projectPath),
   })
@@ -437,6 +432,10 @@ async function vectorOptimizeChunks(projectPath: string): Promise<void> {
 
 export async function legacyVectorRowCount(projectPath: string): Promise<number> {
   try {
+    if (isWebMode()) {
+      const res = await apiProjectVectorLegacyRowCount(apiProjectId(projectPath))
+      return res.count
+    }
     return await invoke("vector_legacy_row_count", {
       projectPath: normalizePath(projectPath),
     })
@@ -446,6 +445,10 @@ export async function legacyVectorRowCount(projectPath: string): Promise<number>
 }
 
 export async function dropLegacyVectorTable(projectPath: string): Promise<void> {
+  if (isWebMode()) {
+    await apiProjectVectorDropLegacy(apiProjectId(projectPath))
+    return
+  }
   await invoke("vector_drop_legacy", {
     projectPath: normalizePath(projectPath),
   })
@@ -486,15 +489,6 @@ async function noteIncrementalVectorWrite(projectPath: string): Promise<void> {
   await optimizeChunkVectorTableBestEffort(pp)
 }
 
-// ── Chunk enrichment ─────────────────────────────────────────────────────
-
-/**
- * Build the text we actually embed for a chunk: page title + heading
- * breadcrumb + chunk content. The breadcrumb is the most important
- * context for a short chunk — a 300-char excerpt about "Mixture of
- * Experts" is far more findable when the embedded text explicitly
- * names its containing sections.
- */
 function enrichChunkForEmbedding(
   pageTitle: string,
   chunk: Chunk,
@@ -571,15 +565,6 @@ async function preparePageEmbeddingRows(
   }
 }
 
-// ── Public API: embedPage / embedAllPages / searchByEmbedding ────────────
-
-/**
- * Embed a wiki page: chunk → per-chunk embed → replace the page's
- * vectors in LanceDB in one batch. Every transient failure leaves the
- * existing v2 rows intact (empty upsert is a no-op Rust-side).
- *
- * Called by ingest.ts after writing a page to disk.
- */
 export async function embedPage(
   projectPath: string,
   pageId: string,
@@ -611,12 +596,6 @@ export async function embedPage(
   return true
 }
 
-/**
- * Embed every wiki content page that isn't already indexed (or re-embed
- * all when `force === true`). Driven from Settings → Embedding or on
- * first enable. Skips structural pages (index / log / overview /
- * purpose / schema) — they're aggregate views, not retrieval targets.
- */
 export async function embedAllPages(
   projectPath: string,
   cfg: EmbeddingConfig,
@@ -729,9 +708,6 @@ export async function embedAllPages(
     if (written > 0) {
       await optimizeChunkVectorTableBestEffort(pp)
     }
-    // Forced rebuild succeeded, so the legacy v1 per-page table is obsolete
-    // even when every readable content page was empty and no v2 rows were
-    // written. Keep this outside the `written > 0` optimization guard.
     await dropLegacyVectorTableBestEffort(pp)
 
     return written
@@ -760,21 +736,6 @@ export async function embedAllPages(
   return indexed
 }
 
-/**
- * Vector search over the v2 chunk store, shaped to stay API-compatible
- * with the pre-0.3.11 per-page interface. Under the hood:
- *   1. Embed the query.
- *   2. Over-fetch top-K × 3 chunks.
- *   3. Group by page_id; score each page as max(chunk_scores) plus
- *      0.3 × sum of the other chunks' scores (bounded — capped at
- *      1.0 - max_score), so a page with two good chunks outranks a
- *      page with one equally-good chunk and a weaker one.
- *   4. Sort pages by score, return top-K.
- *
- * The optional `matchedChunks` field gives callers the raw chunk
- * context when they want to surface "matched in this section" in
- * the UI. Existing callers can ignore it.
- */
 export interface PageSearchResult {
   id: string
   score: number
@@ -802,8 +763,6 @@ export async function searchByEmbedding(
   }
   if (rawChunks.length === 0) return []
 
-  // Group by page; keep every matched chunk's score so we can compute
-  // a blended per-page score.
   const byPage = new Map<string, ChunkSearchResult[]>()
   for (const c of rawChunks) {
     const bucket = byPage.get(c.page_id)
@@ -816,9 +775,6 @@ export async function searchByEmbedding(
     chunks.sort((a, b) => b.score - a.score)
     const top = chunks[0].score
     const tail = chunks.slice(1).reduce((sum, c) => sum + c.score, 0)
-    // Cap the tail contribution so many-weak-chunks can't drown a
-    // single-strong-chunk page. 0.3 weight is empirical; adjust later
-    // with real data.
     const blended = top + Math.min(tail * 0.3, Math.max(0, 1 - top))
     ranked.push({
       id: pageId,
@@ -840,10 +796,6 @@ export async function searchByEmbedding(
   return ranked.slice(0, topK)
 }
 
-/**
- * Remove a page's embeddings from the v2 index. Called from the
- * source-delete flow so orphaned chunks don't pollute future searches.
- */
 export async function removePageEmbedding(
   projectPath: string,
   pageId: string,
@@ -855,10 +807,6 @@ export async function removePageEmbedding(
   }
 }
 
-/**
- * Total chunks in the v2 index. Surfaces "N chunks indexed" status
- * in Settings.
- */
 export async function getEmbeddingCount(projectPath: string): Promise<number> {
   try {
     return await vectorCountChunks(projectPath)

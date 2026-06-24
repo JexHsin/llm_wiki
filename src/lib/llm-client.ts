@@ -1,4 +1,6 @@
 import type { LlmConfig } from "@/stores/wiki-store"
+import { apiProjectChat } from "@/commands/http-api"
+import { isWebMode } from "@/lib/web-mode"
 import { isAzureOpenAiEndpoint } from "@/lib/azure-openai"
 import { getProviderConfig, type RequestOverrides } from "./llm-providers"
 import { getHttpFetch, isFetchNetworkError } from "./tauri-fetch"
@@ -69,14 +71,23 @@ export async function streamChat(
 ): Promise<void> {
   const { onToken, onDone, onError } = callbacks
 
-  // Claude Code CLI uses a subprocess transport (stdin/stdout), not
-  // HTTP. Dispatch before getProviderConfig — that function throws for
-  // this provider because it has no URL/headers.
+  // Claude Code / Codex CLI use subprocess transports. Those are still
+  // desktop-only by design; in Web mode we must not silently fall back to
+  // a different HTTP provider because that would change user-selected model
+  // semantics.
   if (config.provider === "claude-code") {
+    if (isWebMode()) {
+      onError(new Error("Claude Code provider is desktop-only and is not available through the Web HTTP API."))
+      return
+    }
     return streamViaClaudeCodeCli(config, messages, callbacks, signal, requestOverrides)
   }
 
   if (config.provider === "codex-cli") {
+    if (isWebMode()) {
+      onError(new Error("Codex CLI provider is desktop-only and is not available through the Web HTTP API."))
+      return
+    }
     return streamViaCodexCli(config, messages, callbacks, signal, requestOverrides)
   }
 
@@ -112,13 +123,21 @@ export async function streamChat(
   let response: Response
   try {
     const body = providerConfig.buildBody(messages, requestOverrides)
-    const httpFetch = await getHttpFetch()
-    response = await httpFetch(providerConfig.url, {
-      method: "POST",
-      headers: providerConfig.headers,
-      body: JSON.stringify(body),
-      signal: combinedSignal,
-    })
+    if (isWebMode()) {
+      response = await apiProjectChat("current", {
+        url: providerConfig.url,
+        headers: providerConfig.headers,
+        body,
+      }, { signal: combinedSignal })
+    } else {
+      const httpFetch = await getHttpFetch()
+      response = await httpFetch(providerConfig.url, {
+        method: "POST",
+        headers: providerConfig.headers,
+        body: JSON.stringify(body),
+        signal: combinedSignal,
+      })
+    }
   } catch (err) {
     if (signal?.aborted) {
       onDone()

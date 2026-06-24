@@ -2,6 +2,8 @@ import { readFile, listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { buildRetrievalGraph, calculateRelevance } from "./graph-relevance"
 import { normalizePath } from "@/lib/path-utils"
+import { isWebMode } from "@/lib/web-mode"
+import { loadWebGraphData } from "@/commands/web-graph"
 import Graph from "graphology"
 import louvain from "graphology-communities-louvain"
 
@@ -159,6 +161,10 @@ function fileNameToId(fileName: string): string {
 export async function buildWikiGraph(
   projectPath: string,
 ): Promise<{ nodes: GraphNode[]; edges: GraphEdge[]; communities: CommunityInfo[] }> {
+  if (isWebMode()) {
+    return loadWebGraphData("current")
+  }
+
   const wikiRoot = `${normalizePath(projectPath)}/wiki`
 
   let tree: FileNode[]
