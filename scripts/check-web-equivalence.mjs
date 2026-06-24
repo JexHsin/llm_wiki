@@ -42,6 +42,7 @@ const requiredPaths = [
   'src/commands/http-api.ts',
   'src/commands/web-equivalent.ts',
   'src/commands/web-fs.ts',
+  'src/commands/web-projects.ts',
   'src-tauri/src/api_server.rs',
   'src-tauri/src/web_api_proxy.rs',
   'src/commands/fs.ts',
