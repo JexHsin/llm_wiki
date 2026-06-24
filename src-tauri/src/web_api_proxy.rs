@@ -65,6 +65,14 @@ fn handle_request(app: AppHandle, client: reqwest::Client, mut request: tiny_htt
             web_chat::handle_web_chat(client, request, project_id);
             return;
         }
+        if let Some(project_id) = read_route(request.url()) {
+            if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
+                respond_value(request, status, body);
+                return;
+            }
+            handle_project_read(app, request, &project_id);
+            return;
+        }
         if let Some((project_id, action)) = write_route(request.url()) {
             if let Some((status, body)) = ensure_api_access(&app, request.url(), request.headers()) {
                 respond_value(request, status, body);
@@ -166,6 +174,18 @@ fn chat_route(url: &str) -> Option<String> {
     }
 }
 
+fn read_route(url: &str) -> Option<String> {
+    let (path, _) = url.split_once('?').unwrap_or((url, ""));
+    let parts = path
+        .trim_start_matches("/api/v1/")
+        .split('/')
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["projects", project_id, "files", "read"] => Some(percent_decode(project_id)),
+        _ => None,
+    }
+}
+
 fn write_route(url: &str) -> Option<(String, String)> {
     let (path, _) = url.split_once('?').unwrap_or((url, ""));
     let parts = path
@@ -178,6 +198,43 @@ fn write_route(url: &str) -> Option<(String, String)> {
         ["projects", project_id, "files", "delete"] => Some((percent_decode(project_id), "delete_file".to_string())),
         ["projects", project_id, "directories", "create"] => Some((percent_decode(project_id), "create_directory".to_string())),
         _ => None,
+    }
+}
+
+fn handle_project_read(app: AppHandle, mut request: tiny_http::Request, project_id: &str) {
+    let Some((resolved_id, project_path)) = resolve_project(&app, project_id) else {
+        respond_value(request, 404, json!({ "ok": false, "error": format!("Unknown project: {project_id}") }));
+        return;
+    };
+    let body = match read_json_body(&mut request) {
+        Ok(body) => body,
+        Err((status, body)) => {
+            respond_value(request, status, body);
+            return;
+        }
+    };
+    let Some(raw_path) = body.get("path").and_then(Value::as_str) else {
+        respond_value(request, 400, json!({ "ok": false, "error": "Missing string field: path" }));
+        return;
+    };
+    let target = match resolve_project_scoped_path(&project_path, raw_path) {
+        Ok(path) => path,
+        Err(err) => {
+            respond_value(request, 400, json!({ "ok": false, "error": err }));
+            return;
+        }
+    };
+    match fs::read_to_string(&target) {
+        Ok(content) => respond_value(request, 200, json!({
+            "ok": true,
+            "projectId": resolved_id,
+            "path": normalize_path(&target.to_string_lossy()),
+            "content": content,
+        })),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            respond_value(request, 404, json!({ "ok": false, "error": format!("File not found: {err}") }))
+        }
+        Err(err) => respond_value(request, 415, json!({ "ok": false, "error": format!("File is not readable as UTF-8 text: {err}") })),
     }
 }
 
